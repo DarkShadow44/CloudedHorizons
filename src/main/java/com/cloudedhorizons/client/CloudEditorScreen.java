@@ -35,6 +35,15 @@ public final class CloudEditorScreen extends CustomModularScreen {
     private static final double MIN_FADE = 0.0D;
     private static final double MAX_FADE = 128.0D;
     private static final double SLIDER_MAX_FADE = 32.0D;
+    /** Noise multiplier / offset limits: the text field accepts a wide range, the slider a practical one. */
+    private static final double MIN_MUL = -100.0D;
+    private static final double MAX_MUL = 100.0D;
+    private static final double SLIDER_MIN_MUL = 0.0D;
+    private static final double SLIDER_MAX_MUL = 4.0D;
+    private static final double MIN_OFFSET = -100.0D;
+    private static final double MAX_OFFSET = 100.0D;
+    private static final double SLIDER_MIN_OFFSET = -1.0D;
+    private static final double SLIDER_MAX_OFFSET = 1.0D;
     /** Cutoff limits; the noise is roughly -1..1, so values outside that are all or nothing. */
     private static final double MIN_CUTOFF = -1.0D;
     private static final double MAX_CUTOFF = 1.0D;
@@ -51,7 +60,7 @@ public final class CloudEditorScreen extends CustomModularScreen {
     @Override
     public ModularPanel buildUI(ModularGuiContext context) {
         rows = 0;
-        ModularPanel panel = ModularPanel.defaultPanel("cloud_editor", 220, FIRST_ROW + 6 * ROW_HEIGHT + 6);
+        ModularPanel panel = ModularPanel.defaultPanel("cloud_editor", 220, FIRST_ROW + 8 * ROW_HEIGHT + 6);
         panel.child(IKey.str("Cloud Editor").asWidget().top(7).left(7));
 
         addRow(
@@ -68,6 +77,24 @@ public final class CloudEditorScreen extends CustomModularScreen {
                 "Cutoff",
                 doubleField(CloudRenderer::getCutoff, CloudRenderer::setCutoff, MIN_CUTOFF, MAX_CUTOFF),
                 slider(MIN_CUTOFF, MAX_CUTOFF, CloudRenderer::getCutoff, v -> CloudRenderer.setCutoff(round2(v))));
+        addRow(
+                panel,
+                "Multiplier",
+                doubleField(CloudRenderer::getNoiseMultiplier, CloudRenderer::setNoiseMultiplier, MIN_MUL, MAX_MUL),
+                slider(
+                        SLIDER_MIN_MUL,
+                        SLIDER_MAX_MUL,
+                        CloudRenderer::getNoiseMultiplier,
+                        v -> CloudRenderer.setNoiseMultiplier(round2(v))));
+        addRow(
+                panel,
+                "Offset",
+                doubleField(CloudRenderer::getNoiseOffset, CloudRenderer::setNoiseOffset, MIN_OFFSET, MAX_OFFSET),
+                slider(
+                        SLIDER_MIN_OFFSET,
+                        SLIDER_MAX_OFFSET,
+                        CloudRenderer::getNoiseOffset,
+                        v -> CloudRenderer.setNoiseOffset(round2(v))));
         addRow(
                 panel,
                 "Edge fade",

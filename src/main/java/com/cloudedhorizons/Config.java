@@ -23,6 +23,9 @@ public final class Config {
     public static double cutoff = 0.3D;
     /** Distance in voxels from the field's top and bottom over which clouds thin out; 0 = hard cut. */
     public static double edgeFade = 0.0D;
+    /** Applied to the raw noise before the cutoff test: value = noise * noiseMultiplier + noiseOffset. */
+    public static double noiseMultiplier = 1.0D;
+    public static double noiseOffset = 0.0D;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -44,6 +47,8 @@ public final class Config {
             fieldHeight = fieldHeightProperty().getInt();
             cutoff = cutoffProperty().getDouble();
             edgeFade = edgeFadeProperty().getDouble();
+            noiseMultiplier = noiseMultiplierProperty().getDouble();
+            noiseOffset = noiseOffsetProperty().getDouble();
             noiseScaleX = noiseScaleProperty("X").getDouble();
             noiseScaleY = noiseScaleProperty("Y").getDouble();
             noiseScaleZ = noiseScaleProperty("Z").getDouble();
@@ -64,6 +69,8 @@ public final class Config {
         fieldHeightProperty().set(fieldHeight);
         cutoffProperty().set(cutoff);
         edgeFadeProperty().set(edgeFade);
+        noiseMultiplierProperty().set(noiseMultiplier);
+        noiseOffsetProperty().set(noiseOffset);
         noiseScaleProperty("X").set(noiseScaleX);
         noiseScaleProperty("Y").set(noiseScaleY);
         noiseScaleProperty("Z").set(noiseScaleZ);
@@ -97,6 +104,22 @@ public final class Config {
                 0.0D,
                 "Distance in voxels from the top and bottom of the cloud field over which clouds thin out and round off. "
                         + "0 cuts them off flat.");
+    }
+
+    private static Property noiseMultiplierProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "noiseMultiplier",
+                1.0D,
+                "The noise is multiplied by this (then offset) before the cutoff test.");
+    }
+
+    private static Property noiseOffsetProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "noiseOffset",
+                0.0D,
+                "Added to the noise after the multiplier, before the cutoff test.");
     }
 
     private static Property noiseScaleProperty(String axis) {

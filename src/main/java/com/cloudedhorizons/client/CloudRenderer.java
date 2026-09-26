@@ -140,6 +140,24 @@ public final class CloudRenderer {
         fieldChanged();
     }
 
+    public static double getNoiseMultiplier() {
+        return Config.noiseMultiplier;
+    }
+
+    public static void setNoiseMultiplier(double multiplier) {
+        Config.noiseMultiplier = multiplier;
+        fieldChanged();
+    }
+
+    public static double getNoiseOffset() {
+        return Config.noiseOffset;
+    }
+
+    public static void setNoiseOffset(double offset) {
+        Config.noiseOffset = offset;
+        fieldChanged();
+    }
+
     public static double getNoiseScaleX() {
         return Config.noiseScaleX;
     }
@@ -434,6 +452,8 @@ public final class CloudRenderer {
                 (float) Config.noiseScaleZ);
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uCutoff"), (float) Config.cutoff);
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEdgeFade"), (float) Config.edgeFade);
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uNoiseMul"), (float) Config.noiseMultiplier);
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uNoiseOffset"), (float) Config.noiseOffset);
         GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uLayers"), allocatedLayers);
         // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));

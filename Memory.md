@@ -72,7 +72,9 @@ Rendering code and mixins must be compatible with that environment.
   0..128) raises the threshold from the cutoff to at least 0.6 at the outermost voxel layers, which are forced empty.
   The effective fade width is limited to half the field height. The 0.6 endpoint was chosen after a local sample of
   the shader's simplex noise peaked near 0.55; the prior ramps to a bias of 2 and then a cutoff of 1.0 emptied most
-  of the fade band. Each editor row has a label, a text field for exact values and a MUI2 `SliderWidget`
+  of the fade band. Multiplier / Offset (`Config.noiseMultiplier`/`noiseOffset`, keys `clouds.noiseMultiplier`/`noiseOffset`,
+  defaults 1 / 0) transform the noise (`n * mul + offset`) before the cutoff test; the edge-fade ramp top (0.6, the
+  measured noise peak, set by the user) is scaled the same way. Each editor row has a label, a text field for exact values and a MUI2 `SliderWidget`
   for quick testing, and both edit the same value. Scale sliders round to 2 decimals. The height slider covers 1..128 and the scale sliders 1..256; the
   scale text field accepts 0.1..100000. `CloudRenderer` setters only mark the config dirty (`saveLater`), and
   `saveIfDue` writes it at most once per second from the render loop. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,

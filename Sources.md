@@ -115,3 +115,6 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   seed 1; its maximum was about 0.55 and none exceeded 0.6. The 1.0 endpoint was far outside the observed range,
   so most of the requested fade width was empty. The replacement ramps to at least 0.6, measures from outer voxel
   centers, forces the outermost layers empty, and limits the fade to half the field height (agent proposal).
+- **User requirement — 2026-09-26:** Add a multiplier and an offset for the noise to tweak it further.
+- **User change — 2026-09-26:** The user edited `generate.fsh` so the edge-fade ramp ends at 0.6 (the measured noise
+  peak, about 0.55) and the outermost layers are empty.

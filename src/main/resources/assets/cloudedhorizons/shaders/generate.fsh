@@ -10,6 +10,8 @@ uniform vec2 uOriginXZ;   // world X/Z of the volume's minimum corner
 uniform float uEvolve;
 uniform vec3 uNoiseScale; // noise feature size per axis (x, y, z), in voxels
 uniform float uCutoff;    // voxel is solid where the noise is above this
+uniform float uNoiseMul;    // value = noise * uNoiseMul + uNoiseOffset, before the cutoff test
+uniform float uNoiseOffset;
 uniform float uEdgeFade;  // voxels from top and bottom over which clouds thin out; 0 = hard cut
 
 out vec4 outColor;
@@ -21,9 +23,9 @@ void main() {
     // Voxel coordinates (x, y, z); the volume origin is a whole number of voxels.
     vec2 xz = uOriginXZ / uVS + floor(gl_FragCoord.xy) + 0.5;
     vec3 v = vec3(xz.x, float(uLayer) + 0.5, xz.y);
-    float n = snoise4(vec4(v / max(uNoiseScale, vec3(1e-3)), uEvolve));
+    float n = snoise4(vec4(v / max(uNoiseScale, vec3(1e-3)), uEvolve)) * uNoiseMul + uNoiseOffset;
 
-    // This simplex implementation rarely reaches 0.6 (sampled peak ~0.55), so a ramp to 1.0 removes almost all
+    // This simplex implementation rarely reaches 0.6 (sampled peak ~0.55) before the multiplier and offset, so a ramp to 1.0 removes almost all
     // clouds in the first few fade layers. End the ramp near the actual noise range to use the whole fade distance.
     // Measure from layer centers so both outermost layers are empty instead of leaving a thin clipped cap.
     float threshold = uCutoff;
@@ -32,7 +34,8 @@ void main() {
         float edgeLayer = min(float(uLayer), float(uLayers - 1 - uLayer));
         float fadeLayers = min(uEdgeFade, ceil(float(uLayers) * 0.5));
         float fade = clamp(edgeLayer / max(fadeLayers - 1.0, 1.0), 0.0, 1.0);
-        threshold = mix(max(0.6, uCutoff), uCutoff, fade);
+        float peak = 0.6 * abs(uNoiseMul) + uNoiseOffset;
+        threshold = mix(max(peak, uCutoff), uCutoff, fade);
     }
     bool atBoundary = fadeEnabled && (uLayer == 0 || uLayer == uLayers - 1);
     outColor = vec4(!atBoundary && n > threshold ? 1.0 : 0.0);
