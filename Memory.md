@@ -64,7 +64,10 @@ Rendering code and mixins must be compatible with that environment.
   noise feature size per axis in voxels (`Config.noiseScaleX/Y/Z`, keys `clouds.noiseScaleX/Y/Z`, default 32 =
   the old 256 blocks). They go to `generate.fsh` as `uNoiseScale`, which samples the noise at voxel coordinates /
   scale. Field setters mark `fieldDirty` so the next frame regenerates. The editor's `LiveField` is a shared
-  live-apply text field. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,
+  live-apply text field. Each editor row has a label, a text field for exact values and a MUI2 `SliderWidget`
+  for quick testing, and both edit the same value. Scale sliders round to 2 decimals. The height slider covers 1..128 and the scale sliders 1..256; the
+  scale text field accepts 0.1..100000. `CloudRenderer` setters only mark the config dirty (`saveLater`), and
+  `saveIfDue` writes it at most once per second from the render loop. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,
   rebindable in Controls) and opens the screen with `ClientGUI.open`. The MUI2 API usage was written from memory, not
   checked against the jar, and has not been compiled.
 

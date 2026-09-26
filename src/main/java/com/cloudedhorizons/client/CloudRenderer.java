@@ -49,6 +49,11 @@ public final class CloudRenderer {
     private static double lastWorldTime = Double.NaN;
     private static double lastRegenTime = Double.NEGATIVE_INFINITY;
 
+    /** Minimum time between config writes, so sliders do not rewrite the file every frame. */
+    private static final long SAVE_INTERVAL_MS = 1000L;
+    private static boolean configDirty;
+    private static long lastSaveMs;
+
     /** Set when a field parameter changes; the volume is regenerated on the next frame. */
     private static boolean fieldDirty;
     /** Number of voxel layers the 3D texture is currently allocated with. */
@@ -76,7 +81,7 @@ public final class CloudRenderer {
 
     public static void setMorphSpeed(double speed) {
         Config.morphSpeed = speed;
-        Config.saveClouds();
+        saveLater();
     }
 
     public static double getBaseY() {
@@ -86,7 +91,7 @@ public final class CloudRenderer {
     public static void setBaseY(double y) {
         // Only affects placement, so changing it needs no regeneration.
         Config.cloudHeight = y;
-        Config.saveClouds();
+        saveLater();
     }
 
     /** Height of the cloud field in voxels. */
@@ -97,7 +102,7 @@ public final class CloudRenderer {
     public static void setFieldHeight(int voxels) {
         // The texture is reallocated and regenerated on the next frame (see render).
         Config.fieldHeight = voxels;
-        Config.saveClouds();
+        saveLater();
     }
 
     public static double getNoiseScaleX() {
@@ -127,9 +132,23 @@ public final class CloudRenderer {
         fieldChanged();
     }
 
+    /** Marks the cloud settings for saving; {@link #saveIfDue()} writes them from the render loop. */
+    private static void saveLater() {
+        configDirty = true;
+    }
+
+    private static void saveIfDue() {
+        long now = System.currentTimeMillis();
+        if (configDirty && now - lastSaveMs >= SAVE_INTERVAL_MS) {
+            configDirty = false;
+            lastSaveMs = now;
+            Config.saveClouds();
+        }
+    }
+
     private static void fieldChanged() {
         fieldDirty = true;
-        Config.saveClouds();
+        saveLater();
     }
 
     /** Voxel layers to allocate: the configured field height, limited to 1..MAX_LAYERS. */
@@ -158,6 +177,7 @@ public final class CloudRenderer {
         if (fieldDirty) {
             generate(mc);
         }
+        saveIfDue();
         updateMorph(mc, world, partialTicks);
 
         GL11.glGetFloatv(GL11.GL_MODELVIEW_MATRIX, MATRIX);

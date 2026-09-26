@@ -12,6 +12,7 @@ import com.cleanroommc.modularui.screen.ModularPanel;
 import com.cleanroommc.modularui.screen.viewport.ModularGuiContext;
 import com.cleanroommc.modularui.value.DoubleValue;
 import com.cleanroommc.modularui.value.IntValue;
+import com.cleanroommc.modularui.widgets.SliderWidget;
 import com.cleanroommc.modularui.widgets.textfield.TextFieldWidget;
 
 import com.cloudedhorizons.CloudedHorizons;
@@ -25,9 +26,11 @@ public final class CloudEditorScreen extends CustomModularScreen {
     /** Field height limits in voxels; must match CloudRenderer.MAX_LAYERS. */
     private static final int MIN_HEIGHT = 1;
     private static final int MAX_HEIGHT = 128;
-    /** Noise scale limits in voxels. */
+    /** Noise scale limits in voxels. The text field accepts the full range, the slider a practical testing range. */
     private static final double MIN_SCALE = 0.1D;
     private static final double MAX_SCALE = 100000.0D;
+    private static final double SLIDER_MIN_SCALE = 1.0D;
+    private static final double SLIDER_MAX_SCALE = 256.0D;
 
     private static final int ROW_HEIGHT = 18;
     private static final int FIRST_ROW = 22;
@@ -41,20 +44,47 @@ public final class CloudEditorScreen extends CustomModularScreen {
     @Override
     public ModularPanel buildUI(ModularGuiContext context) {
         rows = 0;
-        ModularPanel panel = ModularPanel.defaultPanel("cloud_editor", 176, FIRST_ROW + 4 * ROW_HEIGHT + 6);
+        ModularPanel panel = ModularPanel.defaultPanel("cloud_editor", 220, FIRST_ROW + 4 * ROW_HEIGHT + 6);
         panel.child(IKey.str("Cloud Editor").asWidget().top(7).left(7));
 
-        addRow(panel, "Height", intField(CloudRenderer::getFieldHeight, CloudRenderer::setFieldHeight));
-        addRow(panel, "Scale X", doubleField(CloudRenderer::getNoiseScaleX, CloudRenderer::setNoiseScaleX));
-        addRow(panel, "Scale Y", doubleField(CloudRenderer::getNoiseScaleY, CloudRenderer::setNoiseScaleY));
-        addRow(panel, "Scale Z", doubleField(CloudRenderer::getNoiseScaleZ, CloudRenderer::setNoiseScaleZ));
+        addRow(
+                panel,
+                "Height",
+                intField(CloudRenderer::getFieldHeight, CloudRenderer::setFieldHeight),
+                slider(
+                        MIN_HEIGHT,
+                        MAX_HEIGHT,
+                        CloudRenderer::getFieldHeight,
+                        v -> CloudRenderer.setFieldHeight((int) Math.round(v))));
+        addScaleRow(panel, "Scale X", CloudRenderer::getNoiseScaleX, CloudRenderer::setNoiseScaleX);
+        addScaleRow(panel, "Scale Y", CloudRenderer::getNoiseScaleY, CloudRenderer::setNoiseScaleY);
+        addScaleRow(panel, "Scale Z", CloudRenderer::getNoiseScaleZ, CloudRenderer::setNoiseScaleZ);
         return panel;
     }
 
-    private void addRow(ModularPanel panel, String label, TextFieldWidget field) {
+    private void addScaleRow(ModularPanel panel, String label, DoubleSupplier getter, DoubleConsumer setter) {
+        addRow(
+                panel,
+                label,
+                doubleField(getter, setter),
+                slider(SLIDER_MIN_SCALE, SLIDER_MAX_SCALE, getter, v -> setter.accept(round2(v))));
+    }
+
+    /** One parameter row: label, text field for exact values, slider for quick testing. Both edit the same value. */
+    private void addRow(ModularPanel panel, String label, TextFieldWidget field, SliderWidget slider) {
         int top = FIRST_ROW + rows++ * ROW_HEIGHT;
         panel.child(IKey.str(label).asWidget().top(top + 4).left(7));
-        panel.child(field.top(top).left(60).size(80, 14));
+        panel.child(field.top(top).left(52).size(44, 14));
+        panel.child(slider.top(top).left(100).size(113, 14));
+    }
+
+    /** Rounds slider values to two decimals so the linked text field stays short. */
+    private static double round2(double v) {
+        return Math.round(v * 100.0D) / 100.0D;
+    }
+
+    private static SliderWidget slider(double min, double max, DoubleSupplier getter, DoubleConsumer setter) {
+        return new SliderWidget().bounds(min, max).value(new DoubleValue.Dynamic(getter, setter));
     }
 
     private static TextFieldWidget intField(IntSupplier getter, IntConsumer setter) {

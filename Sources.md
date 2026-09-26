@@ -97,3 +97,7 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   field, which cuts the clouds off below and above, not its base Y.
 - **User requirement — 2026-09-26:** Cloud parameters such as height are in cloud voxels, not Minecraft blocks.
 - **User requirement — 2026-09-26:** Add noise scale X / Y / Z parameters to the editor.
+- **User requirement — 2026-09-26:** Editor parameters have both a text field (for exact values) and a slider (for
+  quick testing).
+- **Agent proposal — 2026-09-26:** Throttle config saves to once per second so dragging a slider does not rewrite the
+  file every frame.
