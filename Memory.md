@@ -60,7 +60,11 @@ Rendering code and mixins must be compatible with that environment.
   `modularui2`. `client.CloudEditorScreen` (a `CustomModularScreen`) is the start of the cloud editor. Its first
   parameter is a Height text field (`LiveNumberField`), which applies every valid edit immediately. It sets the
   field height in voxels (`Config.fieldHeight`, config key `clouds.fieldHeight`, default 24, range 1..128), not the
-  base Y. `CloudRenderer` reallocates and regenerates the 3D texture when it changes. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,
+  base Y. `CloudRenderer` reallocates and regenerates the 3D texture when it changes. Scale X / Y / Z fields set the
+  noise feature size per axis in voxels (`Config.noiseScaleX/Y/Z`, keys `clouds.noiseScaleX/Y/Z`, default 32 =
+  the old 256 blocks). They go to `generate.fsh` as `uNoiseScale`, which samples the noise at voxel coordinates /
+  scale. Field setters mark `fieldDirty` so the next frame regenerates. The editor's `LiveField` is a shared
+  live-apply text field. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,
   rebindable in Controls) and opens the screen with `ClientGUI.open`. The MUI2 API usage was written from memory, not
   checked against the jar, and has not been compiled.
 
@@ -86,5 +90,5 @@ cumulus clouds.
   ground), and per-face voxel AO and fog.
 - The mod uses the same field. The simplex noise is in its own shader, `shaders/noise.fsh`, which is compiled as a
   separate fragment shader object and linked into the generate program (`createProgram` takes several fragment
-  shaders). `generate.fsh` only declares the `snoise4` prototype and has `NOISE_SCALE` 256 and `CUTOUT` 0.3 as
-  constants. The morph phase (`uEvolve`) is used at x1, as in the demo.
+  shaders). `generate.fsh` only declares the `snoise4` prototype and has `CUTOUT` 0.3 as a
+  constant (the noise scale is a uniform in the mod). The morph phase (`uEvolve`) is used at x1, as in the demo.

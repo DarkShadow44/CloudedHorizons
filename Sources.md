@@ -96,3 +96,4 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **User requirement — 2026-09-26 (correction):** The editor's height means the vertical extent of the active cloud
   field, which cuts the clouds off below and above, not its base Y.
 - **User requirement — 2026-09-26:** Cloud parameters such as height are in cloud voxels, not Minecraft blocks.
+- **User requirement — 2026-09-26:** Add noise scale X / Y / Z parameters to the editor.

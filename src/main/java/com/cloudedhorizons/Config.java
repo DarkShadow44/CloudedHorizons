@@ -15,6 +15,10 @@ public final class Config {
     public static double cloudHeight = 160.0D;
     /** Height of the cloud field in voxels; the field is cut off below and above it. */
     public static int fieldHeight = 24;
+    /** Noise feature size along each axis, in voxels. */
+    public static double noiseScaleX = 32.0D;
+    public static double noiseScaleY = 32.0D;
+    public static double noiseScaleZ = 32.0D;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -34,6 +38,9 @@ public final class Config {
             cloudHeight = cloudHeightProperty().getDouble();
             morphSpeed = morphSpeedProperty().getDouble();
             fieldHeight = fieldHeightProperty().getInt();
+            noiseScaleX = noiseScaleProperty("X").getDouble();
+            noiseScaleY = noiseScaleProperty("Y").getDouble();
+            noiseScaleZ = noiseScaleProperty("Z").getDouble();
         } finally {
             if (configuration.hasChanged()) {
                 configuration.save();
@@ -49,6 +56,9 @@ public final class Config {
         cloudHeightProperty().set(cloudHeight);
         morphSpeedProperty().set(morphSpeed);
         fieldHeightProperty().set(fieldHeight);
+        noiseScaleProperty("X").set(noiseScaleX);
+        noiseScaleProperty("Y").set(noiseScaleY);
+        noiseScaleProperty("Z").set(noiseScaleZ);
         configuration.save();
     }
 
@@ -62,6 +72,14 @@ public final class Config {
                 "fieldHeight",
                 24,
                 "Height of the cloud field in voxels. Clouds are cut off below and above it.");
+    }
+
+    private static Property noiseScaleProperty(String axis) {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "noiseScale" + axis,
+                32.0D,
+                "Noise feature size along " + axis + ", in voxels. Larger values stretch the clouds along that axis.");
     }
 
     private static Property morphSpeedProperty() {

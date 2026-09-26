@@ -49,6 +49,8 @@ public final class CloudRenderer {
     private static double lastWorldTime = Double.NaN;
     private static double lastRegenTime = Double.NEGATIVE_INFINITY;
 
+    /** Set when a field parameter changes; the volume is regenerated on the next frame. */
+    private static boolean fieldDirty;
     /** Number of voxel layers the 3D texture is currently allocated with. */
     private static int allocatedLayers;
 
@@ -98,6 +100,38 @@ public final class CloudRenderer {
         Config.saveClouds();
     }
 
+    public static double getNoiseScaleX() {
+        return Config.noiseScaleX;
+    }
+
+    public static double getNoiseScaleY() {
+        return Config.noiseScaleY;
+    }
+
+    public static double getNoiseScaleZ() {
+        return Config.noiseScaleZ;
+    }
+
+    public static void setNoiseScaleX(double voxels) {
+        Config.noiseScaleX = voxels;
+        fieldChanged();
+    }
+
+    public static void setNoiseScaleY(double voxels) {
+        Config.noiseScaleY = voxels;
+        fieldChanged();
+    }
+
+    public static void setNoiseScaleZ(double voxels) {
+        Config.noiseScaleZ = voxels;
+        fieldChanged();
+    }
+
+    private static void fieldChanged() {
+        fieldDirty = true;
+        Config.saveClouds();
+    }
+
     /** Voxel layers to allocate: the configured field height, limited to 1..MAX_LAYERS. */
     private static int layers() {
         return Math.max(1, Math.min(MAX_LAYERS, Config.fieldHeight));
@@ -119,6 +153,9 @@ public final class CloudRenderer {
         }
         if (layers() != allocatedLayers) {
             allocateVoxelTexture();
+            fieldDirty = true;
+        }
+        if (fieldDirty) {
             generate(mc);
         }
         updateMorph(mc, world, partialTicks);
@@ -242,6 +279,7 @@ public final class CloudRenderer {
 
     /** Runs the generation shader once per voxel layer into the 3D texture, then restores Minecraft's GL state. */
     private static void generate(Minecraft mc) {
+        fieldDirty = false;
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, generateFbo);
         GL11.glViewport(0, 0, SIZE_X, SIZE_Z);
         GL11.glDisable(GL11.GL_DEPTH_TEST);
@@ -255,6 +293,11 @@ public final class CloudRenderer {
                 (float) ORIGIN_X,
                 (float) ORIGIN_Z);
         GL30.glUniform1ui(GL20.glGetUniformLocation(generateProgram, "uSeed"), SEED);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(generateProgram, "uNoiseScale"),
+                (float) Config.noiseScaleX,
+                (float) Config.noiseScaleY,
+                (float) Config.noiseScaleZ);
         // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));
         int layerLocation = GL20.glGetUniformLocation(generateProgram, "uLayer");
