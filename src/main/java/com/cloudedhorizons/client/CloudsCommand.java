@@ -14,7 +14,7 @@ import net.minecraft.util.ChatComponentText;
 /** Client-side {@code /clouds} command for tweaking the cloud renderer at runtime. */
 public final class CloudsCommand extends CommandBase {
 
-    private static final String USAGE = "/clouds <morph [speed] | height [y] | flyspeed [speed]>";
+    private static final String USAGE = "/clouds <morph [speed] | height [y] | flyspeed [speed] | faces>";
 
     @Override
     public String getCommandName() {
@@ -56,6 +56,8 @@ public final class CloudsCommand extends CommandBase {
             } else {
                 reply(sender, "Cloud height: " + CloudRenderer.getBaseY());
             }
+        } else if ("faces".equalsIgnoreCase(args[0])) {
+            reply(sender, "Cloud faces: " + CloudRenderer.getFaceCount() + " (capacity " + CloudRenderer.getFaceCapacity() + ")");
         } else if ("flyspeed".equalsIgnoreCase(args[0])) {
             // Dev helper: sets the local player's creative fly speed (vanilla default 0.05).
             PlayerCapabilities capabilities = Minecraft.getMinecraft().thePlayer.capabilities;
@@ -97,6 +99,6 @@ public final class CloudsCommand extends CommandBase {
 
     @Override
     public List<String> addTabCompletionOptions(ICommandSender sender, String[] args) {
-        return args.length == 1 ? getListOfStringsMatchingLastWord(args, "morph", "height", "flyspeed") : null;
+        return args.length == 1 ? getListOfStringsMatchingLastWord(args, "morph", "height", "flyspeed", "faces") : null;
     }
 }

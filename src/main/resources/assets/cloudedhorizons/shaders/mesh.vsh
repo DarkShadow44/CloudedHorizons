@@ -9,8 +9,11 @@ uniform mat4 uProj;
 uniform mat4 uView;
 uniform vec3 uBoxMin; // field minimum corner relative to the render origin
 uniform float uVS;    // voxel size in blocks
+uniform float uFieldHeight; // height in voxels, for continuous ambient lighting
+uniform bool uTranslucentPass; // draw only translucent faces (true) or only opaque ones (false)
 
-flat out vec3 vNormal;
+out float vHeight;
+flat out float vAlpha;
 
 // Per direction (+X, -X, +Y, -Y, +Z, -Z): normal and the two edge vectors of the face, ordered so that
 // cross(U, W) = N, which makes the quad counter-clockwise when seen from outside.
@@ -25,11 +28,19 @@ void main() {
     uvec2 face = faces[vertex / 6u];
     vec3 voxel = vec3(float(face.x & 0xfffu), float(face.x >> 24), float((face.x >> 12) & 0xfffu));
     uint d = face.y & 7u;
+    uint alpha = (face.y >> 8) & 0xffu;
+
+    // Faces of the other pass collapse to a point outside the clip volume and produce no fragments.
+    if ((alpha < 255u) != uTranslucentPass) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
 
     vec2 corner = CORNERS[vertex % 6u];
     // Faces on the positive side lie on the voxel's far plane.
     vec3 p = voxel + max(N[d], vec3(0.0)) + U[d] * corner.x + W[d] * corner.y;
 
-    vNormal = N[d];
+    vHeight = p.y / uFieldHeight;
+    vAlpha = float(alpha) / 255.0;
     gl_Position = uProj * uView * vec4(uBoxMin + p * uVS, 1.0);
 }

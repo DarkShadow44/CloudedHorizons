@@ -55,6 +55,11 @@ public final class CloudEditorScreen extends CustomModularScreen {
     private static final double SLIDER_MIN_CUTOFF = -1.0D;
     private static final double SLIDER_MAX_CUTOFF = 1.0D;
 
+    /** Softness limits, in summed-noise units like the cutoff. */
+    private static final double MIN_SOFTNESS = 0.0D;
+    private static final double MAX_SOFTNESS = 10.0D;
+    private static final double SLIDER_MAX_SOFTNESS = 0.5D;
+
     private static final int ROW_HEIGHT = 18;
     private static final int FIRST_ROW = 22;
 
@@ -93,6 +98,11 @@ public final class CloudEditorScreen extends CustomModularScreen {
                 "Cutoff",
                 doubleField(CloudRenderer::getCutoff, CloudRenderer::setCutoff, MIN_CUTOFF, MAX_CUTOFF),
                 slider(SLIDER_MIN_CUTOFF, SLIDER_MAX_CUTOFF, CloudRenderer::getCutoff, v -> CloudRenderer.setCutoff(round2(v))));
+        addRow(
+                panel,
+                "Softness",
+                doubleField(CloudRenderer::getSoftness, CloudRenderer::setSoftness, MIN_SOFTNESS, MAX_SOFTNESS),
+                slider(MIN_SOFTNESS, SLIDER_MAX_SOFTNESS, CloudRenderer::getSoftness, v -> CloudRenderer.setSoftness(round2(v))));
         addRow(
                 panel,
                 "Edge fade",

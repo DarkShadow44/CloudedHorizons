@@ -26,6 +26,8 @@ public final class Config {
     public static double cutoff = 0.3D;
     /** Distance in voxels from the field's top and bottom over which clouds thin out; 0 = hard cut. */
     public static double edgeFade = 0.0D;
+    /** Width below the cutoff, in summed-noise units, of the translucent shell around the clouds; 0 = hard cut. */
+    public static double softness = 0.1D;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -47,6 +49,7 @@ public final class Config {
             fieldHeight = fieldHeightProperty().getInt();
             cutoff = cutoffProperty().getDouble();
             edgeFade = edgeFadeProperty().getDouble();
+            softness = softnessProperty().getDouble();
             loadNoiseLayers();
         } finally {
             if (configuration.hasChanged()) {
@@ -65,6 +68,7 @@ public final class Config {
         fieldHeightProperty().set(fieldHeight);
         cutoffProperty().set(cutoff);
         edgeFadeProperty().set(edgeFade);
+        softnessProperty().set(softness);
         saveNoiseLayers();
         configuration.save();
     }
@@ -162,6 +166,15 @@ public final class Config {
                 "cutoff",
                 0.3D,
                 "Threshold for the summed noise layers. Voxels above it are cloud; higher values mean fewer clouds.");
+    }
+
+    private static Property softnessProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "softness",
+                0.1D,
+                "Width below the cutoff of the translucent shell around the clouds, in summed-noise units. "
+                        + "0 means no shell.");
     }
 
     private static Property edgeFadeProperty() {

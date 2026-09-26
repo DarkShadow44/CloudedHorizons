@@ -140,3 +140,66 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   Requires OpenGL 4.3. All of this comes from the agent's general graphics knowledge.
 - **Experiment — 2026-09-26:** The user saw a line across the screen, with the shading changing beyond a distance. Cause: depth clamp gave every face beyond Minecraft's far plane the same depth.
 - **User decision — 2026-09-26:** Fix it by extending the far plane through a mixin (chosen over the agent's proposal of a separate cloud buffer with log depth).
+- **User requirement — 2026-09-26:** Make voxels translucent depending on how close they are to the cutoff, to round
+  off the clouds.
+- **User decision — 2026-09-26:** Put the translucent voxels outside the opaque shape: opacity ramps from 0 at
+  threshold - softness to 1 at the threshold (replacing the first version, which ramped above the threshold).
+- **Agent proposal — 2026-09-26:** Translucent voxels only get faces toward empty
+  space, opaque voxels toward any non-opaque neighbour. The faces are drawn in two passes, with unsorted alpha blending
+  for the translucent pass. This comes from the agent's general graphics knowledge.
+- **User decision — 2026-09-26:** The shell-only translucent faces looked wrong (screenshot 2026-09-26_22.47.00).
+  Translucent voxels must be full translucent cubes: faces are hidden only by opaque neighbours.
+- **User observation — 2026-09-26:** Screenshot `run/client/screenshots/2026-09-26_22.57.34.png` shows large,
+  rectangular grey shading patches after the transparency commit; the user confirmed that commit introduced the issue.
+- **Agent analysis — 2026-09-26:** The opaque pass used axis-aligned face shading while the translucent pass used
+  unshaded white, exposing dark opaque quads through the shell. This comes from the local screenshot and shader code.
+- **User observation — 2026-09-26:** Shading translucent cubes by the opacity gradient made them grey. Keep the
+  translucent cubes unshaded. The revised agent fix also leaves opaque faces unshaded where they directly border the
+  shell, so their lighting cannot show through it as dark rectangles; other opaque faces retain their original
+  axis-based lighting.
+
+
+### Unified cloud lighting and transparency rewrite
+
+- **User requirement — 2026-09-26:** Inspect the last commit and unstaged attempts; rewrite shading because solid
+  or translucent cubes still become grey and clouds develop large grey streaks. Reliable rendering takes priority
+  over sophisticated shading. This supersedes the earlier workaround of exempting translucent/shell-facing cubes.
+- **Local repository / agent analysis — 2026-09-26:** Commit `a479f80` shaded opaque faces by cube axis and sun
+  direction (down to 0.595 of the cloud colour), but made translucent faces unshaded. The unstaged shell-facing
+  flag added another neighbour-dependent switch. These produce discontinuous lighting at material boundaries.
+  Compute atomics also make face order arbitrary; ordinary alpha blending is order-dependent for differently lit
+  layers. These are code-level failure mechanisms, not an in-game verification of the reported streaks.
+- **Agent design — 2026-09-26:** Replace face lighting with a shared continuous ambient ramp over the field's height,
+  0.88 at the base through 1.0 at the top. Evaluate it from perspective-correct interpolated position, independently
+  of face direction, opacity and neighbour class. This is intentionally restrained layer shading, not physical
+  self-shadowing. Keep Minecraft's day/weather cloud colour and the requested full translucent cubes.
+- **Agent design, general graphics knowledge — 2026-09-26:** Weighted blended order-independent transparency:
+  additive weighted colour/alpha and multiplicative revealage, followed by one fullscreen resolve. Use bounded
+  opacity weights `0.01 + alpha^2` and RGBA32F sums to avoid depth-weight instability with the extended far plane
+  and half-float precision loss with thousands of voxel layers. Opaque depth is retained; translucent fragments
+  compare against a copy of the actual destination depth. This approximates sorted colour blending while giving
+  order-independent equations. No web, external implementation or external assets were consulted.
+- **Experiment — 2026-09-26:** Offline Python reference arithmetic: three differently lit layers had a 0.051 colour
+  spread across six ordinary blend orders and zero across the new resolve orders. All 256 R8 opacities passed
+  single-layer and equal-colour-stack equivalence and same-light opaque-backing checks. Lighting stayed monotonic
+  in [0.88, 1]. Twenty shuffled 5200-layer float32 accumulations had maximum colour error 2.5e-6 against the
+  double-precision weighted mean. These validate the math, not GPU execution; no project/shader build or game run.
+
+
+### Transparency render-state regression correction
+
+- **User observation — 2026-09-26:** The first shading rewrite made the hand and GUI green and clouds glow reddish.
+- **Local repository / agent analysis — 2026-09-26:** The rewrite removed the previous renderer's final
+  `glColor4f(1, 1, 1, 1)` and protected only drawing, leaving generation/meshing outside the state guard. Both are
+  corrected. Indexed blend/mask operations and temporary use of lightmap texture unit 1 are suspected additional
+  cache-interaction paths under Angelica; there is no local Angelica implementation/runtime trace to confirm the
+  exact mechanism. Do not treat this diagnosis as an in-game verified fix.
+- **Agent design — 2026-09-26:** Pack weighted scalar lighting, total weight and optical depth into one additive
+  RGBA32F attachment. All voxels share the same RGB tint, so factoring tint out until resolve preserves the previous
+  weighted-colour result. `sum(-log(1-alpha))` replaces the revealage product, resolved with `1-exp(-sum)`.
+  This removes per-attachment blending/masks and the second sampler/lightmap-unit interaction while retaining OIT.
+  Use ordinary global GL calls throughout and guard the whole render operation. No external sources were used.
+- **Experiment — 2026-09-26:** Offline Python equivalence checks passed for all 255 translucent R8 alpha values,
+  empty/single/10/100/5200-layer stacks, neutral/warm/cool tints, and all six permutations of three layers (tolerance
+  1e-12). Source checks found no remaining indexed blend/mask calls or lightmap-unit use and confirmed the outer
+  state guard and white colour reset. `git diff --check` passed; no build or in-game test was run by the agent.

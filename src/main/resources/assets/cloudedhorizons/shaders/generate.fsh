@@ -1,7 +1,8 @@
 #version 330 core
-// Writes one horizontal layer (y) of the voxel volume: 1 = solid, 0 = empty.
+// Writes one horizontal layer (y) of the voxel volume as opacity: 0 = empty, 1 = opaque, between = translucent.
 // The field value is the sum of up to MAX_NOISE_LAYERS layers of 4D simplex noise, each with its own scale,
-// multiplier and offset; a voxel is solid where the sum is above the global cutoff. Linked together with noise.fsh.
+// multiplier and offset; a voxel is opaque where the sum is above the global cutoff, and a translucent shell whose
+// opacity falls to 0 over uSoftness below the cutoff rounds off the cloud surfaces. Linked together with noise.fsh.
 // uEvolve moves the noise along its time axis, which morphs the clouds in place.
 
 uniform int uLayer;
@@ -15,6 +16,7 @@ const int MAX_NOISE_LAYERS = 8; // must match Config.MAX_NOISE_LAYERS
 uniform int uNoiseLayers;
 uniform vec3 uLayerScale[MAX_NOISE_LAYERS];     // noise feature size per axis (x, y, z), in voxels
 uniform vec2 uLayerMulOffset[MAX_NOISE_LAYERS]; // layer value = noise * x + y
+uniform float uSoftness;  // summed-noise width below the threshold over which voxels fade out; 0 = hard cut
 uniform float uEdgeFade;  // voxels from top and bottom over which clouds thin out; 0 = hard cut
 
 out vec4 outColor;
@@ -49,5 +51,14 @@ void main() {
         threshold = mix(max(peak, uCutoff), uCutoff, fade);
     }
     bool atBoundary = fadeEnabled && (uLayer == 0 || uLayer == uLayers - 1);
-    outColor = vec4(!atBoundary && n > threshold ? 1.0 : 0.0);
+    float alpha = 0.0;
+    if (!atBoundary) {
+        if (n > threshold) {
+            alpha = 1.0;
+        } else if (uSoftness > 0.0 && n > threshold - uSoftness) {
+            // Keep every shell voxel at least 1/255 so the R8 texture does not round thin edges away.
+            alpha = max((n - (threshold - uSoftness)) / uSoftness, 1.0 / 255.0);
+        }
+    }
+    outColor = vec4(alpha);
 }

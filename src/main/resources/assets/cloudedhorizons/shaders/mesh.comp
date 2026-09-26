@@ -1,12 +1,15 @@
 #version 430 core
 // Voxel mesher, compiled twice: without EMIT it counts the faces per chunk, with EMIT it writes them.
-// A face is emitted for every side of a solid voxel whose neighbour is empty (outside the field counts as empty).
+// Voxels hold an opacity (0 = empty, 1 = opaque, between = translucent). An opaque voxel gets a face on every side
+// whose neighbour is not opaque, so it shows through translucent neighbours. A translucent voxel is a full cube: it
+// gets a face on every side not covered by an opaque neighbour, so the opacity adds up through translucent regions. Outside the field counts as empty.
 //
 // One invocation per voxel. The workgroup is 8 x 8 x 4 voxels (x, z, y), and the chunk size is a multiple of 8,
 // so a whole workgroup lies in one chunk: faces are counted in shared memory, and one global atomic per
 // workgroup reserves space in the chunk.
 //
-// Face encoding (uvec2): x = voxel x | z << 12 | y << 24, y = direction (0..5: +X, -X, +Y, -Y, +Z, -Z).
+// Face encoding (uvec2): x = voxel x | z << 12 | y << 24, y = direction (0..5: +X, -X, +Y, -Y, +Z, -Z)
+// | opacity (0..255) << 8. Lighting is evaluated continuously at draw time, not encoded per face.
 // Must match mesh.vsh.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in; // (x, z, y), like the texture layout
@@ -33,10 +36,12 @@ shared uint sBase;
 const ivec3 DIRS[6] = ivec3[6](
     ivec3(1, 0, 0), ivec3(-1, 0, 0), ivec3(0, 1, 0), ivec3(0, -1, 0), ivec3(0, 0, 1), ivec3(0, 0, -1));
 
-bool solid(ivec3 c) {
-    if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uDims))) return false;
-    return texelFetch(uVoxels, c.xzy, 0).r > 0.5;
+float opacity(ivec3 c) {
+    if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uDims))) return 0.0;
+    return texelFetch(uVoxels, c.xzy, 0).r;
 }
+
+const float OPAQUE = 254.5 / 255.0;
 
 void main() {
     ivec3 c = ivec3(gl_GlobalInvocationID).xzy; // voxel (x, y, z)
@@ -44,9 +49,11 @@ void main() {
     barrier();
 
     uint mask = 0u;
-    if (solid(c)) {
+    float a = opacity(c);
+    if (a > 0.0) {
+        // Only opaque neighbours hide a face.
         for (int d = 0; d < 6; d++) {
-            if (!solid(c + DIRS[d])) mask |= 1u << d;
+            if (opacity(c + DIRS[d]) < OPAQUE) mask |= 1u << d;
         }
     }
     uint n = uint(bitCount(mask));
@@ -63,10 +70,11 @@ void main() {
     if (mask == 0u) return;
     uint index = chunks[chunk].offset + sBase + local;
     uint pos = uint(c.x) | (uint(c.z) << 12) | (uint(c.y) << 24);
+    uint alpha = uint(round(a * 255.0)) << 8;
     for (int d = 0; d < 6; d++) {
         if ((mask & (1u << d)) != 0u) {
             // Faces past the capacity are dropped; mesh_scan.comp clamps the draw counts to match.
-            if (index < uCapacity) faces[index] = uvec2(pos, uint(d));
+            if (index < uCapacity) faces[index] = uvec2(pos, uint(d) | alpha);
             index++;
         }
     }

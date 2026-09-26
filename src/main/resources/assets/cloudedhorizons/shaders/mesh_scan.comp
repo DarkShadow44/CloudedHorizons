@@ -1,7 +1,8 @@
 #version 430 core
 // Runs between the mesher's count and emit passes, as a single workgroup. Turns the per-chunk face counts into
 // offsets in the face buffer (exclusive prefix sum), writes one indirect draw command per chunk, and resets the
-// counters for the next meshing.
+// counters for the next meshing. The total face count (including faces past the capacity) goes into chunks[0].pad
+// so CloudRenderer can report overflow.
 
 layout(local_size_x = 1024) in;
 
@@ -46,6 +47,8 @@ void main() {
         sSums[t] += v;
         barrier();
     }
+
+    if (t == 1023u) chunks[0].pad = sSums[1023];
 
     uint offset = sSums[t] - sum;
     for (uint i = begin; i < end; i++) {

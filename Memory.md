@@ -40,16 +40,51 @@ Rendering code and mixins must be compatible with that environment.
   2. Meshing (replaced the raymarcher on 2026-09-26, so LODs can be added later): after each complete pass,
      `mesh.comp` (compiled twice: count, and `EMIT`) and `mesh_scan.comp` build one face per solid voxel side next to
      empty space. There is no greedy merging yet. Faces are grouped per chunk of 32x32 voxel columns, and each chunk
-     has a range in the face buffer (capacity `MAX_FACES` 2^24 at 8 bytes = 128 MB; overflowing faces are dropped) and
+     has a range in the face buffer (capacity `MAX_FACES` 2^26 at 8 bytes = 512 MB (raised from 2^24 after a 23.7M-face overflow at high softness); overflowing faces are dropped) and
      its own indirect draw command. The count pass does atomics per chunk (a workgroup of 8x8x4 lies in one chunk),
      the scan (one workgroup of 1024) does a prefix sum, writes the draw commands and resets the counters, and the
      emit pass writes the faces. Face = uvec2(x | z<<12 | y<<24, dir).
-  3. Drawing: `mesh.vsh` (vertex pulling from the SSBO via gl_VertexID, 6 vertices per face) + `mesh.fsh` (flat face
-     shading), one `glMultiDrawArraysIndirect` over all chunks, back-face culling. `MixinEntityRenderer` raises the
+  3. Drawing: `mesh.vsh` (vertex pulling from the SSBO via gl_VertexID, 6 vertices per face) + `mesh.fsh`,
+     two `glMultiDrawArraysIndirect` calls over all chunks with back-face culling, then a fullscreen resolve. `MixinEntityRenderer` raises the
      far plane of the world projection (the `gluPerspective` call in `setupCameraTransform`, argument only; `farPlaneDistance`
      and fog stay as they are) to `CloudRenderer.getFarPlane()` (the field diagonal, about 29000 blocks). Before this,
      depth clamp was used, and all faces beyond the far plane got the same depth: a visible line and wrong faces. A
      separate cloud framebuffer with logarithmic depth was considered as the fallback if far clouds z-fight.
+  4. Translucency: the R8 texture holds opacity, 1 above the threshold and a translucent shell outside it,
+     `max((sum - (threshold - softness)) / softness, 1/255)` for sums in (threshold - softness, threshold]
+     (`Config.softness`, key `clouds.softness`, default 0.1, editor row after Cutoff, slider 0..0.5, field 0..10).
+     Every non-empty voxel gets faces toward non-opaque neighbours, so translucent voxels are full cubes (user
+     request after the shell-only version looked wrong). Opacity is
+     stored in face.y bits 8..15. Opaque faces draw to the current destination with depth writes. Translucent faces
+     use weighted blended order-independent transparency in one RGBA32F target: R accumulates `light * alpha * weight`,
+     G accumulates `alpha * weight`, B accumulates `-log(1 - alpha)`, with `weight = 0.01 + alpha^2`.
+     `cloud_composite.fsh` resolves `uColour * R/G` and `1 - exp(-B)` over the destination once. All channels use
+     ordinary additive blending; no indexed blend or colour-mask operations and no use of lightmap texture unit 1. This is an approximation to sorted
+     transparency; it removes dependence on arbitrary compute emission order, apart from floating-point rounding.
+     The destination's world + opaque-cloud depth is copied to DEPTH_COMPONENT32F and tested in the translucent
+     fragment shader. The screen targets are resized with the viewport (20 bytes/pixel total); the depth copy path
+     assumes a single-sample source framebuffer. State protection encloses generation, allocation, meshing and drawing,
+     restoring the actual read/draw framebuffer bindings, viewport, global blend/mask state, texture/sampler bindings
+     on unit 0 and three SSBO bindings. The old hook's white fixed-function colour reset is preserved for hand/GUI
+     rendering. Use global GL entry points consistently with Minecraft/Angelica's state tracking. Generation also restores the actual
+     incoming framebuffer and viewport instead of assuming the vanilla target.
+     Lighting is now one continuous height-based ambient ramp for both passes, `0.88 + 0.12 * smoothstep(0, 1, h)`,
+     where h is interpolated voxel Y / field height. It multiplies Minecraft's cloud colour, preserving day/weather
+     tint. There is no axis/sun-normal darkening, opacity-gradient normal, or shell-facing exemption/flag. It provides
+     gentle layer-bottom shading, not local cloud self-shadowing. Both shader variants come from the same material;
+     the translucent variant writes packed light/weight/optical depth instead of display RGB.
+     The user's first in-game test of the initial two-target rewrite produced a green hand/GUI and reddish glowing
+     clouds. The single-target/global-state correction removes the suspected cache-conflict paths and restores the
+     omitted white colour reset; it has not been retested in game.
+     Offline mathematical checks passed (all R8 alpha values, equal-colour stacking, shuffled layer order, light
+     bounds, 5200-layer float32 sums). The single-target correction also passed algebraic equivalence checks for all
+     255 translucent R8 values, stacks up to 5200 layers, and neutral/warm/cool tints. `git diff --check` passed.
+     The agent has not built, compiled shaders or run the game.
+     Pending in-game checks: softness 0 / 0.1 / 0.5, looking from below/above/inside, terrain intersections, moving
+     across chunk boundaries, field heights 1 / 24 / 128, day/night, window resizing, and Angelica render-state recovery.
+  5. Overflow check: `mesh_scan.comp` writes the total face count into `chunks[0].pad`; `CloudRenderer.checkFaceCount`
+     reads it back after each meshing (a small sync), warns in the log (at most every 5 s) when it exceeds
+     `MAX_FACES`, and `/clouds faces` shows the last count. Large softness overflowed the old 2^24 buffer (23.7M faces).
   The shaders are in `assets/cloudedhorizons/shaders`: GLSL 330, and 430 for compute and `mesh.vsh`.
 - The mod compiles against the LWJGL3 API through lwjgl3ify, so use LWJGL3 method names (`glGetFloatv`,
   `glUniformMatrix4fv`).

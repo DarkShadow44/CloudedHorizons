@@ -4,12 +4,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GLAllocation;
-import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
@@ -18,9 +18,11 @@ import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL33;
 import org.lwjgl.opengl.GL40;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
@@ -42,8 +44,8 @@ import com.cloudedhorizons.NoiseLayer;
  * next to empty space), grouped per chunk of {@link #CHUNK_SIZE} x {@link #CHUNK_SIZE} voxel columns. Each chunk
  * has its own range of the face buffer and its own indirect draw command, so chunks can later get their own LOD or
  * be culled.</li>
- * <li>Drawing: one {@code glMultiDrawArraysIndirect} call; the vertex shader builds the quads from the face
- * buffer.</li>
+ * <li>Drawing: opaque depth pass, weighted blended translucent pass, then a fullscreen resolve.
+ * Both mesh passes use the same continuous ambient lighting.</li>
  * </ol>
  */
 public final class CloudRenderer {
@@ -58,7 +60,7 @@ public final class CloudRenderer {
     /** Chunk size in voxels along X and Z; must be a multiple of 8 (the mesher's workgroup size). */
     private static final int CHUNK_SIZE = 32;
     /** Face buffer capacity (8 bytes per face). Faces beyond it are not drawn. */
-    private static final int MAX_FACES = 1 << 24;
+    private static final int MAX_FACES = 1 << 26;
     /** Bytes per chunk record in the chunk buffer and per indirect draw command (4 uints each). */
     private static final int CHUNK_BYTES = 16;
 
@@ -80,6 +82,11 @@ public final class CloudRenderer {
     private static final long SAVE_INTERVAL_MS = 1000L;
     private static boolean configDirty;
     private static long lastSaveMs;
+    /** Faces the last meshing produced, including those past MAX_FACES that were dropped. */
+    private static long lastFaceCount;
+    private static long lastOverflowWarnMs;
+    private static boolean overflowing;
+    private static final IntBuffer FACE_COUNT = GLAllocation.createDirectIntBuffer(1);
 
     /** Set when a field parameter changes; a regeneration pass is started or queued on the next frame. */
     private static boolean fieldDirty;
@@ -104,6 +111,13 @@ public final class CloudRenderer {
     private static int meshScanProgram;
     private static int meshEmitProgram;
     private static int drawProgram;
+    private static int compositeProgram;
+    private static int translucentProgram;
+    private static int cloudFbo;
+    private static int cloudAccumulation;
+    private static int cloudSceneDepth;
+    private static int cloudWidth;
+    private static int cloudHeight;
     private static int emptyVao;
     private static int generateFbo;
     /** Faces (uvec2 each), per-chunk records and per-chunk indirect draw commands; see mesh.comp. */
@@ -113,6 +127,8 @@ public final class CloudRenderer {
 
     private static final FloatBuffer MATRIX = GLAllocation.createDirectFloatBuffer(16);
     private static final FloatBuffer PROJECTION = GLAllocation.createDirectFloatBuffer(16);
+    private static final DrawState DRAW_STATE = new DrawState();
+    private static final IntBuffer GENERATE_VIEWPORT = GLAllocation.createDirectIntBuffer(4);
 
     private CloudRenderer() {}
 
@@ -152,6 +168,15 @@ public final class CloudRenderer {
 
     public static void setCutoff(double cutoff) {
         Config.cutoff = cutoff;
+        fieldChanged();
+    }
+
+    public static double getSoftness() {
+        return Config.softness;
+    }
+
+    public static void setSoftness(double softness) {
+        Config.softness = softness;
         fieldChanged();
     }
 
@@ -236,6 +261,27 @@ public final class CloudRenderer {
         if (failed) {
             return;
         }
+        if (!GL.getCapabilities().OpenGL43) {
+            failed = true;
+            CloudedHorizons.LOG.error("OpenGL 4.3 is required for GPU clouds");
+            return;
+        }
+        // Generation, allocation and meshing also change state. Protect the complete render operation.
+        DRAW_STATE.capture();
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            renderClouds(mc, world, partialTicks);
+        } finally {
+            DRAW_STATE.restore();
+            // Keep the old cloud hook's white fixed-function modulation for the hand and GUI.
+            GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+        }
+    }
+
+    private static void renderClouds(Minecraft mc, World world, float partialTicks) {
+        if (failed) {
+            return;
+        }
         if (!initialized) {
             try {
                 initialize(mc);
@@ -277,44 +323,238 @@ public final class CloudRenderer {
         GL11.glGetFloatv(GL11.GL_PROJECTION_MATRIX, PROJECTION);
 
         Vec3 colour = world.getCloudColour(partialTicks);
-        double sunAngle = world.getCelestialAngle(partialTicks) * Math.PI * 2.0D;
 
+        drawClouds(colour, DRAW_STATE);
+    }
+
+    private static void drawClouds(Vec3 colour, DrawState state) {
         GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glDepthMask(true);
         GL11.glDisable(GL11.GL_BLEND);
+        GL11.glDisable(GL11.GL_ALPHA_TEST);
         GL11.glEnable(GL11.GL_CULL_FACE);
         GL11.glCullFace(GL11.GL_BACK);
 
-        GL20.glUseProgram(drawProgram);
-        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(drawProgram, "uProj"), false, PROJECTION);
-        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(drawProgram, "uView"), false, MATRIX);
-        GL20.glUniform3f(
-                GL20.glGetUniformLocation(drawProgram, "uBoxMin"),
-                (float) (originX - RenderManager.renderPosX),
-                (float) (Config.cloudHeight - RenderManager.renderPosY),
-                (float) (originZ - RenderManager.renderPosZ));
-        GL20.glUniform1f(GL20.glGetUniformLocation(drawProgram, "uVS"), VOXEL_SIZE);
-        GL20.glUniform3f(
-                GL20.glGetUniformLocation(drawProgram, "uColour"),
-                (float) colour.xCoord,
-                (float) colour.yCoord,
-                (float) colour.zCoord);
-        GL20.glUniform3f(
-                GL20.glGetUniformLocation(drawProgram, "uSunDir"),
-                (float) -Math.sin(sunAngle),
-                (float) Math.cos(sunAngle),
-                0.0F);
-
+        setDrawUniforms(drawProgram, colour);
         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, faceBuffer);
         GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, drawBuffer);
         GL30.glBindVertexArray(emptyVao);
+        int passLocation = GL20.glGetUniformLocation(drawProgram, "uTranslucentPass");
+        GL20.glUniform1i(passLocation, 0);
         GL43.glMultiDrawArraysIndirect(GL11.GL_TRIANGLES, 0L, chunksX * chunksZ, 0);
-        GL30.glBindVertexArray(0);
-        GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
-        GL20.glUseProgram(0);
 
-        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+        // Capture world + opaque-cloud depth from the current destination, not an assumed vanilla framebuffer.
+        // Copying depth into a texture allows format conversion without depth-blit format restrictions.
+        ensureCloudTargets(state.viewport.get(2), state.viewport.get(3));
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, state.drawFbo);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, cloudSceneDepth);
+        GL33.glBindSampler(0, 0);
+        GL11.glCopyTexSubImage2D(
+                GL11.GL_TEXTURE_2D, 0, 0, 0, state.viewport.get(0), state.viewport.get(1), cloudWidth, cloudHeight);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, cloudFbo);
+        GL11.glViewport(0, 0, cloudWidth, cloudHeight);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_STENCIL_TEST);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(false);
+        GL11.glColorMask(true, true, true, true);
+        FloatBuffer clear = state.clear;
+        clear.put(0, 0.0F).put(1, 0.0F).put(2, 0.0F).put(3, 0.0F);
+        GL30.glClearBufferfv(GL11.GL_COLOR, 0, clear);
+        // All channels use additive blending. Avoid indexed blend/mask calls: they can bypass
+        // Angelica's tracking of the global state used by subsequent world, hand and GUI draws.
+        GL11.glEnable(GL11.GL_BLEND);
+        GL20.glBlendEquationSeparate(GL14.GL_FUNC_ADD, GL14.GL_FUNC_ADD);
+        GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        setDrawUniforms(translucentProgram, colour);
+        GL20.glUniform1i(GL20.glGetUniformLocation(translucentProgram, "uTranslucentPass"), 1);
+        GL43.glMultiDrawArraysIndirect(GL11.GL_TRIANGLES, 0L, chunksX * chunksZ, 0);
+
+        // Resolve the weighted colour and combined opacity once over the opaque destination.
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, state.drawFbo);
+        state.restoreViewportAndMask();
+        setEnabled(GL11.GL_SCISSOR_TEST, state.scissor);
+        setEnabled(GL11.GL_STENCIL_TEST, state.stencil);
+        GL11.glDisable(GL11.GL_CULL_FACE);
+        GL20.glBlendEquationSeparate(GL14.GL_FUNC_ADD, GL14.GL_FUNC_ADD);
+        GL14.glBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL20.glUseProgram(compositeProgram);
+        GL20.glUniform1i(GL20.glGetUniformLocation(compositeProgram, "uAccumulation"), 0);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(compositeProgram, "uColour"),
+                (float) colour.xCoord,
+                (float) colour.yCoord,
+                (float) colour.zCoord);
+        GL20.glUniform2i(
+                GL20.glGetUniformLocation(compositeProgram, "uViewportOrigin"),
+                state.viewport.get(0),
+                state.viewport.get(1));
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, cloudAccumulation);
+        GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+    }
+
+    private static void setDrawUniforms(int program, Vec3 colour) {
+        GL20.glUseProgram(program);
+        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(program, "uProj"), false, PROJECTION);
+        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(program, "uView"), false, MATRIX);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(program, "uBoxMin"),
+                (float) (originX - RenderManager.renderPosX),
+                (float) (Config.cloudHeight - RenderManager.renderPosY),
+                (float) (originZ - RenderManager.renderPosZ));
+        GL20.glUniform1f(GL20.glGetUniformLocation(program, "uVS"), VOXEL_SIZE);
+        GL20.glUniform1f(GL20.glGetUniformLocation(program, "uFieldHeight"), allocatedLayers);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(program, "uColour"),
+                (float) colour.xCoord,
+                (float) colour.yCoord,
+                (float) colour.zCoord);
+        GL20.glUniform1i(GL20.glGetUniformLocation(program, "uSceneDepth"), 0);
+    }
+
+    /** Screen-sized targets are reused, with storage replaced only when the viewport changes size. */
+    private static void ensureCloudTargets(int width, int height) {
+        if (cloudWidth == width && cloudHeight == height) {
+            return;
+        }
+        if (cloudFbo == 0) {
+            cloudFbo = GL30.glGenFramebuffers();
+            cloudAccumulation = GL11.glGenTextures();
+            cloudSceneDepth = GL11.glGenTextures();
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        // Thousands of overlapping voxels can lose significant colour precision in a half-float sum.
+        allocateCloudTarget(cloudAccumulation, GL30.GL_RGBA32F, GL11.GL_RGBA, width, height);
+        allocateCloudTarget(cloudSceneDepth, GL30.GL_DEPTH_COMPONENT32F, GL11.GL_DEPTH_COMPONENT, width, height);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, cloudFbo);
+        GL30.glFramebufferTexture2D(
+                GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, cloudAccumulation, 0);
+        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        checkFramebuffer("Cloud transparency");
+        cloudWidth = width;
+        cloudHeight = height;
+    }
+
+    private static void allocateCloudTarget(int texture, int internalFormat, int format, int width, int height) {
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL11.GL_FLOAT, (ByteBuffer) null);
+    }
+
+    private static void setEnabled(int capability, boolean enabled) {
+        if (enabled) {
+            GL11.glEnable(capability);
+        } else {
+            GL11.glDisable(capability);
+        }
+    }
+
+    /** Use the same global GL entry points as Minecraft so Angelica's state cache stays consistent. */
+    private static final class DrawState {
+        int drawFbo;
+        int readFbo;
+        int program;
+        int vao;
+        int indirectBuffer;
+        int storageBuffer;
+        int activeTexture;
+        int texture2D;
+        int texture3D;
+        int sampler;
+        int depthFunc;
+        int cullMode;
+        boolean depth;
+        boolean depthMask;
+        boolean cull;
+        boolean alpha;
+        boolean scissor;
+        boolean stencil;
+        boolean blend;
+        final IntBuffer viewport = GLAllocation.createDirectIntBuffer(4);
+        final FloatBuffer clear = GLAllocation.createDirectFloatBuffer(4);
+        final ByteBuffer mask = GLAllocation.createDirectByteBuffer(4);
+        final int[] storageBindings = new int[3];
+        final int[] blendValues = new int[6];
+        final int[] blendKeys = {
+                GL14.GL_BLEND_SRC_RGB,
+                GL14.GL_BLEND_DST_RGB,
+                GL14.GL_BLEND_SRC_ALPHA,
+                GL14.GL_BLEND_DST_ALPHA,
+                GL20.GL_BLEND_EQUATION_RGB,
+                GL20.GL_BLEND_EQUATION_ALPHA };
+
+        void capture() {
+            drawFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+            readFbo = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+            program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+            vao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+            indirectBuffer = GL11.glGetInteger(GL40.GL_DRAW_INDIRECT_BUFFER_BINDING);
+            storageBuffer = GL11.glGetInteger(GL43.GL_SHADER_STORAGE_BUFFER_BINDING);
+            for (int i = 0; i < storageBindings.length; i++) {
+                storageBindings[i] = GL30.glGetIntegeri(GL43.GL_SHADER_STORAGE_BUFFER_BINDING, i);
+            }
+            activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            texture2D = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            texture3D = GL11.glGetInteger(GL12.GL_TEXTURE_BINDING_3D);
+            sampler = GL30.glGetIntegeri(GL33.GL_SAMPLER_BINDING, 0);
+            GL13.glActiveTexture(activeTexture);
+            depthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+            cullMode = GL11.glGetInteger(GL11.GL_CULL_FACE_MODE);
+            depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+            depthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+            cull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+            alpha = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
+            scissor = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
+            stencil = GL11.glIsEnabled(GL11.GL_STENCIL_TEST);
+            blend = GL11.glIsEnabled(GL11.GL_BLEND);
+            GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
+            GL11.glGetBooleanv(GL11.GL_COLOR_WRITEMASK, mask);
+            for (int i = 0; i < blendKeys.length; i++) {
+                blendValues[i] = GL11.glGetInteger(blendKeys[i]);
+            }
+        }
+
+        void restoreViewportAndMask() {
+            GL11.glViewport(viewport.get(0), viewport.get(1), viewport.get(2), viewport.get(3));
+            GL11.glColorMask(mask.get(0) != 0, mask.get(1) != 0, mask.get(2) != 0, mask.get(3) != 0);
+        }
+
+        void restore() {
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, drawFbo);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFbo);
+            restoreViewportAndMask();
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture2D);
+            GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture3D);
+            GL33.glBindSampler(0, sampler);
+            GL13.glActiveTexture(activeTexture);
+            GL14.glBlendFuncSeparate(blendValues[0], blendValues[1], blendValues[2], blendValues[3]);
+            GL20.glBlendEquationSeparate(blendValues[4], blendValues[5]);
+            setEnabled(GL11.GL_BLEND, blend);
+            GL11.glDepthMask(depthMask);
+            GL11.glDepthFunc(depthFunc);
+            GL11.glCullFace(cullMode);
+            setEnabled(GL11.GL_DEPTH_TEST, depth);
+            setEnabled(GL11.GL_CULL_FACE, cull);
+            setEnabled(GL11.GL_ALPHA_TEST, alpha);
+            setEnabled(GL11.GL_SCISSOR_TEST, scissor);
+            setEnabled(GL11.GL_STENCIL_TEST, stencil);
+            GL20.glUseProgram(program);
+            GL30.glBindVertexArray(vao);
+            GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirectBuffer);
+            for (int i = 0; i < storageBindings.length; i++) {
+                GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, i, storageBindings[i]);
+            }
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, storageBuffer);
+        }
     }
 
     private static void initialize(Minecraft mc) {
@@ -343,6 +583,8 @@ public final class CloudRenderer {
         meshEmitProgram = createComputeProgram("mesh.comp", "EMIT");
         meshScanProgram = createComputeProgram("mesh_scan.comp", null);
         drawProgram = createProgram("mesh.vsh", "mesh.fsh");
+        translucentProgram = createDefinedProgram("TRANSLUCENT", "mesh.vsh", "mesh.fsh");
+        compositeProgram = createProgram("fullscreen.vsh", "cloud_composite.fsh");
         emptyVao = GL30.glGenVertexArrays();
         voxelTexture = createTexture3D();
         allocateTextures();
@@ -460,6 +702,9 @@ public final class CloudRenderer {
      */
     private static void generateLayers(Minecraft mc, int firstLayer, int count) {
         int endLayer = Math.min(allocatedLayers, firstLayer + count);
+        int previousDrawFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadFbo = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        GL11.glGetIntegerv(GL11.GL_VIEWPORT, GENERATE_VIEWPORT);
 
         // Nothing may sample the texture being written.
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -493,6 +738,7 @@ public final class CloudRenderer {
         }
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uCutoff"), (float) Config.cutoff);
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEdgeFade"), (float) Config.edgeFade);
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uSoftness"), (float) Config.softness);
         GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uLayers"), allocatedLayers);
         // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));
@@ -511,12 +757,10 @@ public final class CloudRenderer {
         GL30.glBindVertexArray(0);
         GL20.glUseProgram(0);
 
-        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
-        if (OpenGlHelper.isFramebufferEnabled()) {
-            mc.getFramebuffer().bindFramebuffer(true);
-        } else {
-            GL11.glViewport(0, 0, mc.displayWidth, mc.displayHeight);
-        }
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFbo);
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFbo);
+        GL11.glViewport(
+                GENERATE_VIEWPORT.get(0), GENERATE_VIEWPORT.get(1), GENERATE_VIEWPORT.get(2), GENERATE_VIEWPORT.get(3));
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glEnable(GL11.GL_CULL_FACE);
     }
@@ -546,12 +790,51 @@ public final class CloudRenderer {
         GL43.glDispatchCompute(groupsX, groupsZ, groupsY);
         // The faces are read by the vertex shader, the draw commands by the indirect draw.
         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_COMMAND_BARRIER_BIT);
+        checkFaceCount();
 
         for (int binding = 0; binding < 3; binding++) {
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, binding, 0);
         }
         GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
         GL20.glUseProgram(0);
+    }
+
+    /**
+     * Reads the total face count that mesh_scan.comp stored in chunk 0's pad field and warns when faces were dropped.
+     * The readback waits for the mesher to finish, which is acceptable once per meshing.
+     */
+    private static void checkFaceCount() {
+        GL42.glMemoryBarrier(GL42.GL_BUFFER_UPDATE_BARRIER_BIT);
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, chunkBuffer);
+        FACE_COUNT.clear();
+        GL15.glGetBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 12L, FACE_COUNT);
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        lastFaceCount = FACE_COUNT.get(0) & 0xffffffffL;
+
+        long nowMs = Minecraft.getSystemTime();
+        if (lastFaceCount > MAX_FACES) {
+            if (!overflowing || nowMs - lastOverflowWarnMs >= 5000L) {
+                CloudedHorizons.LOG.warn(
+                        "Cloud mesh has {} faces, {} over the capacity of {}; the excess is not drawn",
+                        lastFaceCount,
+                        lastFaceCount - MAX_FACES,
+                        MAX_FACES);
+                lastOverflowWarnMs = nowMs;
+            }
+            overflowing = true;
+        } else if (overflowing) {
+            CloudedHorizons.LOG.info("Cloud mesh back within capacity: {} of {} faces", lastFaceCount, MAX_FACES);
+            overflowing = false;
+        }
+    }
+
+    /** Faces the last meshing produced, including any past the face buffer capacity. */
+    public static long getFaceCount() {
+        return lastFaceCount;
+    }
+
+    public static int getFaceCapacity() {
+        return MAX_FACES;
     }
 
     private static void setMeshUniforms(int program) {
@@ -588,11 +871,15 @@ public final class CloudRenderer {
      * shared functions (e.g. noise.fsh) that the main one declares as prototypes.
      */
     private static int createProgram(String vertexName, String... fragmentNames) {
+        return createDefinedProgram(null, vertexName, fragmentNames);
+    }
+
+    private static int createDefinedProgram(String define, String vertexName, String... fragmentNames) {
         int program = GL20.glCreateProgram();
         int[] shaders = new int[fragmentNames.length + 1];
-        shaders[0] = compileShader(GL20.GL_VERTEX_SHADER, vertexName, null);
+        shaders[0] = compileShader(GL20.GL_VERTEX_SHADER, vertexName, define);
         for (int i = 0; i < fragmentNames.length; i++) {
-            shaders[i + 1] = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentNames[i], null);
+            shaders[i + 1] = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentNames[i], define);
         }
         for (int shader : shaders) {
             GL20.glAttachShader(program, shader);
