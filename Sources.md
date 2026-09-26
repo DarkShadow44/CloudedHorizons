@@ -118,3 +118,8 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **User requirement — 2026-09-26:** Add a multiplier and an offset for the noise to tweak it further.
 - **User change — 2026-09-26:** The user edited `generate.fsh` so the edge-fade ramp ends at 0.6 (the measured noise
   peak, about 0.55) and the outermost layers are empty.
+- **User requirement — 2026-09-26:** Multiple noise layers. Each layer gets all the noise settings except the cutoff,
+  which is global. The layers are summed, then the cutoff decides.
+- **Agent proposal — 2026-09-26:** Keep height, edge fade and morph speed global. Give each layer a fixed 4D domain
+  shift so layers differ. A new layer is one octave finer (half the scale and multiplier). Layer tabs rebuild the
+  screen by reopening it. Old single-layer config keys migrate into layer 1.

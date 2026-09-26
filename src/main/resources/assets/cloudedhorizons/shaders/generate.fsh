@@ -1,6 +1,7 @@
 #version 330 core
 // Writes one horizontal layer (y) of the voxel volume: 1 = solid, 0 = empty.
-// Same field as webdemo/index.html: 4D simplex noise above a cutout. Linked together with noise.fsh.
+// The field value is the sum of up to MAX_NOISE_LAYERS layers of 4D simplex noise, each with its own scale,
+// multiplier and offset; a voxel is solid where the sum is above the global cutoff. Linked together with noise.fsh.
 // uEvolve moves the noise along its time axis, which morphs the clouds in place.
 
 uniform int uLayer;
@@ -8,10 +9,12 @@ uniform int uLayers;      // voxel layers in the field
 uniform float uVS;        // voxel size in blocks
 uniform vec2 uOriginXZ;   // world X/Z of the volume's minimum corner
 uniform float uEvolve;
-uniform vec3 uNoiseScale; // noise feature size per axis (x, y, z), in voxels
-uniform float uCutoff;    // voxel is solid where the noise is above this
-uniform float uNoiseMul;    // value = noise * uNoiseMul + uNoiseOffset, before the cutoff test
-uniform float uNoiseOffset;
+uniform float uCutoff;    // voxel is solid where the summed layers are above this
+
+const int MAX_NOISE_LAYERS = 8; // must match Config.MAX_NOISE_LAYERS
+uniform int uNoiseLayers;
+uniform vec3 uLayerScale[MAX_NOISE_LAYERS];     // noise feature size per axis (x, y, z), in voxels
+uniform vec2 uLayerMulOffset[MAX_NOISE_LAYERS]; // layer value = noise * x + y
 uniform float uEdgeFade;  // voxels from top and bottom over which clouds thin out; 0 = hard cut
 
 out vec4 outColor;
@@ -23,9 +26,18 @@ void main() {
     // Voxel coordinates (x, y, z); the volume origin is a whole number of voxels.
     vec2 xz = uOriginXZ / uVS + floor(gl_FragCoord.xy) + 0.5;
     vec3 v = vec3(xz.x, float(uLayer) + 0.5, xz.y);
-    float n = snoise4(vec4(v / max(uNoiseScale, vec3(1e-3)), uEvolve)) * uNoiseMul + uNoiseOffset;
+    float n = 0.0;
+    float peak = 0.0; // about the largest value the sum reaches, for the edge fade
+    for (int i = 0; i < MAX_NOISE_LAYERS; i++) {
+        if (i >= uNoiseLayers) break;
+        // Each layer samples a different, far-away region of the noise so layers with equal scales still differ.
+        vec4 shift = float(i) * vec4(1731.7, 911.3, 2179.1, 537.9);
+        vec2 mo = uLayerMulOffset[i];
+        n += snoise4(vec4(v / max(uLayerScale[i], vec3(1e-3)), uEvolve) + shift) * mo.x + mo.y;
+        peak += 0.6 * abs(mo.x) + mo.y;
+    }
 
-    // This simplex implementation rarely reaches 0.6 (sampled peak ~0.55) before the multiplier and offset, so a ramp to 1.0 removes almost all
+    // This simplex implementation rarely reaches 0.6 (sampled peak ~0.55) per layer, so a ramp to 1.0 removes almost all
     // clouds in the first few fade layers. End the ramp near the actual noise range to use the whole fade distance.
     // Measure from layer centers so both outermost layers are empty instead of leaving a thin clipped cap.
     float threshold = uCutoff;
@@ -34,7 +46,6 @@ void main() {
         float edgeLayer = min(float(uLayer), float(uLayers - 1 - uLayer));
         float fadeLayers = min(uEdgeFade, ceil(float(uLayers) * 0.5));
         float fade = clamp(edgeLayer / max(fadeLayers - 1.0, 1.0), 0.0, 1.0);
-        float peak = 0.6 * abs(uNoiseMul) + uNoiseOffset;
         threshold = mix(max(peak, uCutoff), uCutoff, fade);
     }
     bool atBoundary = fadeEnabled && (uLayer == 0 || uLayer == uLayers - 1);

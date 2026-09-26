@@ -1,7 +1,10 @@
 package com.cloudedhorizons;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
+import net.minecraftforge.common.config.ConfigCategory;
 import net.minecraftforge.common.config.Configuration;
 import net.minecraftforge.common.config.Property;
 
@@ -15,17 +18,14 @@ public final class Config {
     public static double cloudHeight = 160.0D;
     /** Height of the cloud field in voxels; the field is cut off below and above it. */
     public static int fieldHeight = 24;
-    /** Noise feature size along each axis, in voxels. */
-    public static double noiseScaleX = 32.0D;
-    public static double noiseScaleY = 32.0D;
-    public static double noiseScaleZ = 32.0D;
-    /** Noise threshold: a voxel is solid where the noise (roughly -1..1) is above it. */
+    /** Maximum number of noise layers; must match MAX_NOISE_LAYERS in generate.fsh. */
+    public static final int MAX_NOISE_LAYERS = 8;
+    /** Noise layers, summed before the cutoff test. Always holds at least one layer. */
+    public static final List<NoiseLayer> noiseLayers = new ArrayList<>();
+    /** Threshold applied to the summed layers: a voxel is solid where the sum is above it. */
     public static double cutoff = 0.3D;
     /** Distance in voxels from the field's top and bottom over which clouds thin out; 0 = hard cut. */
     public static double edgeFade = 0.0D;
-    /** Applied to the raw noise before the cutoff test: value = noise * noiseMultiplier + noiseOffset. */
-    public static double noiseMultiplier = 1.0D;
-    public static double noiseOffset = 0.0D;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -47,11 +47,7 @@ public final class Config {
             fieldHeight = fieldHeightProperty().getInt();
             cutoff = cutoffProperty().getDouble();
             edgeFade = edgeFadeProperty().getDouble();
-            noiseMultiplier = noiseMultiplierProperty().getDouble();
-            noiseOffset = noiseOffsetProperty().getDouble();
-            noiseScaleX = noiseScaleProperty("X").getDouble();
-            noiseScaleY = noiseScaleProperty("Y").getDouble();
-            noiseScaleZ = noiseScaleProperty("Z").getDouble();
+            loadNoiseLayers();
         } finally {
             if (configuration.hasChanged()) {
                 configuration.save();
@@ -69,12 +65,83 @@ public final class Config {
         fieldHeightProperty().set(fieldHeight);
         cutoffProperty().set(cutoff);
         edgeFadeProperty().set(edgeFade);
-        noiseMultiplierProperty().set(noiseMultiplier);
-        noiseOffsetProperty().set(noiseOffset);
-        noiseScaleProperty("X").set(noiseScaleX);
-        noiseScaleProperty("Y").set(noiseScaleY);
-        noiseScaleProperty("Z").set(noiseScaleZ);
+        saveNoiseLayers();
         configuration.save();
+    }
+
+    /**
+     * Reads the layers from categories {@code clouds.layer1..N}. Configs from before layers existed kept a single
+     * layer's settings directly in {@code clouds}; those become layer 1 and the old keys are removed.
+     */
+    private static void loadNoiseLayers() {
+        ConfigCategory clouds = configuration.getCategory(CATEGORY_CLOUDS);
+        NoiseLayer legacy = new NoiseLayer();
+        legacy.scaleX = takeLegacy(clouds, "noiseScaleX", legacy.scaleX);
+        legacy.scaleY = takeLegacy(clouds, "noiseScaleY", legacy.scaleY);
+        legacy.scaleZ = takeLegacy(clouds, "noiseScaleZ", legacy.scaleZ);
+        legacy.multiplier = takeLegacy(clouds, "noiseMultiplier", legacy.multiplier);
+        legacy.offset = takeLegacy(clouds, "noiseOffset", legacy.offset);
+
+        int count = Math.max(1, Math.min(MAX_NOISE_LAYERS, layerCountProperty().getInt()));
+        noiseLayers.clear();
+        for (int i = 0; i < count; i++) {
+            Property[] p = layerProperties(i, i == 0 ? legacy : new NoiseLayer());
+            NoiseLayer layer = new NoiseLayer();
+            layer.scaleX = p[0].getDouble();
+            layer.scaleY = p[1].getDouble();
+            layer.scaleZ = p[2].getDouble();
+            layer.multiplier = p[3].getDouble();
+            layer.offset = p[4].getDouble();
+            noiseLayers.add(layer);
+        }
+    }
+
+    private static double takeLegacy(ConfigCategory clouds, String key, double fallback) {
+        Property property = clouds.remove(key);
+        return property != null ? property.getDouble(fallback) : fallback;
+    }
+
+    private static void saveNoiseLayers() {
+        layerCountProperty().set(noiseLayers.size());
+        for (int i = 0; i < noiseLayers.size(); i++) {
+            NoiseLayer layer = noiseLayers.get(i);
+            Property[] p = layerProperties(i, new NoiseLayer());
+            p[0].set(layer.scaleX);
+            p[1].set(layer.scaleY);
+            p[2].set(layer.scaleZ);
+            p[3].set(layer.multiplier);
+            p[4].set(layer.offset);
+        }
+        // Drop categories of removed layers.
+        for (int i = noiseLayers.size(); i < MAX_NOISE_LAYERS; i++) {
+            String category = layerCategory(i);
+            if (configuration.hasCategory(category)) {
+                configuration.removeCategory(configuration.getCategory(category));
+            }
+        }
+    }
+
+    /** Properties of layer {@code index}: scaleX, scaleY, scaleZ, multiplier, offset. */
+    private static Property[] layerProperties(int index, NoiseLayer defaults) {
+        String c = layerCategory(index);
+        return new Property[] {
+                configuration.get(c, "scaleX", defaults.scaleX, "Noise feature size along X, in voxels."),
+                configuration.get(c, "scaleY", defaults.scaleY, "Noise feature size along Y, in voxels."),
+                configuration.get(c, "scaleZ", defaults.scaleZ, "Noise feature size along Z, in voxels."),
+                configuration.get(c, "multiplier", defaults.multiplier, "The layer's noise is multiplied by this."),
+                configuration.get(c, "offset", defaults.offset, "Added to the layer's noise after the multiplier."), };
+    }
+
+    private static String layerCategory(int index) {
+        return CATEGORY_CLOUDS + Configuration.CATEGORY_SPLITTER + "layer" + (index + 1);
+    }
+
+    private static Property layerCountProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "layerCount",
+                1,
+                "Number of noise layers (1.." + MAX_NOISE_LAYERS + "). Their values are summed before the cutoff test.");
     }
 
     private static Property cloudHeightProperty() {
@@ -94,7 +161,7 @@ public final class Config {
                 CATEGORY_CLOUDS,
                 "cutoff",
                 0.3D,
-                "Noise threshold (noise is roughly -1..1). Voxels above it are cloud; higher values mean fewer clouds.");
+                "Threshold for the summed noise layers. Voxels above it are cloud; higher values mean fewer clouds.");
     }
 
     private static Property edgeFadeProperty() {
@@ -104,30 +171,6 @@ public final class Config {
                 0.0D,
                 "Distance in voxels from the top and bottom of the cloud field over which clouds thin out and round off. "
                         + "0 cuts them off flat.");
-    }
-
-    private static Property noiseMultiplierProperty() {
-        return configuration.get(
-                CATEGORY_CLOUDS,
-                "noiseMultiplier",
-                1.0D,
-                "The noise is multiplied by this (then offset) before the cutoff test.");
-    }
-
-    private static Property noiseOffsetProperty() {
-        return configuration.get(
-                CATEGORY_CLOUDS,
-                "noiseOffset",
-                0.0D,
-                "Added to the noise after the multiplier, before the cutoff test.");
-    }
-
-    private static Property noiseScaleProperty(String axis) {
-        return configuration.get(
-                CATEGORY_CLOUDS,
-                "noiseScale" + axis,
-                32.0D,
-                "Noise feature size along " + axis + ", in voxels. Larger values stretch the clouds along that axis.");
     }
 
     private static Property morphSpeedProperty() {

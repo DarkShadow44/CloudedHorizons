@@ -63,18 +63,21 @@ Rendering code and mixins must be compatible with that environment.
   `modularui2`. `client.CloudEditorScreen` (a `CustomModularScreen`) is the start of the cloud editor. Its first
   parameter is a Height text field (`LiveNumberField`), which applies every valid edit immediately. It sets the
   field height in voxels (`Config.fieldHeight`, config key `clouds.fieldHeight`, default 24, range 1..128), not the
-  base Y. `CloudRenderer` reallocates and regenerates the 3D texture when it changes. Scale X / Y / Z fields set the
-  noise feature size per axis in voxels (`Config.noiseScaleX/Y/Z`, keys `clouds.noiseScaleX/Y/Z`, default 32 =
-  the old 256 blocks). They go to `generate.fsh` as `uNoiseScale`, which samples the noise at voxel coordinates /
-  scale. Field setters mark `fieldDirty` so the next frame regenerates. The editor's `LiveField` is a shared
-  live-apply text field. Cutoff (`Config.cutoff`, key `clouds.cutoff`, default 0.3, range -1..1) is an editor row; a voxel is solid
-  where the noise is above it. Edge fade (`Config.edgeFade`, key `clouds.edgeFade`, voxels, default 0, slider 0..32, field
+  base Y. `CloudRenderer` reallocates and regenerates the 3D texture when it changes. Noise layers: the field value is the sum over up to 8 layers (`Config.noiseLayers`,
+  `NoiseLayer`) of `snoise4(voxel / scale, time + shift_i) * multiplier + offset`, and the global cutoff is applied to
+  the sum. Per layer: scale X/Y/Z (voxels), multiplier, offset. Global: height, cutoff, edge fade, morph speed, base Y.
+  Each layer samples a different region of the noise (a fixed 4D shift per layer index). Config: `clouds.layerCount`
+  plus categories `clouds.layer1..N` (scaleX/Y/Z, multiplier, offset); old single-layer keys (`noiseScaleX/Y/Z`,
+  `noiseMultiplier`, `noiseOffset`) are migrated into layer 1 on load. In the editor, global rows come first, then a
+  layer bar (number buttons select a layer, "+" adds one octave finer: half the scale and multiplier of the last
+  layer, "-" removes the selected one; the screen is reopened to rebuild), then the selected layer's rows. The edge
+  fade's ramp top is the sum of `0.6*|mul| + offset` over the layers. `CloudRenderer.fieldChanged()` is public so the
+  editor can signal layer edits. Cutoff (`Config.cutoff`, key `clouds.cutoff`, default 0.3, slider -1..1, field -10..10) is a global editor row; a
+  voxel is solid where the summed layers are above it. Edge fade (`Config.edgeFade`, key `clouds.edgeFade`, voxels, default 0, slider 0..32, field
   0..128) raises the threshold from the cutoff to at least 0.6 at the outermost voxel layers, which are forced empty.
   The effective fade width is limited to half the field height. The 0.6 endpoint was chosen after a local sample of
   the shader's simplex noise peaked near 0.55; the prior ramps to a bias of 2 and then a cutoff of 1.0 emptied most
-  of the fade band. Multiplier / Offset (`Config.noiseMultiplier`/`noiseOffset`, keys `clouds.noiseMultiplier`/`noiseOffset`,
-  defaults 1 / 0) transform the noise (`n * mul + offset`) before the cutoff test; the edge-fade ramp top (0.6, the
-  measured noise peak, set by the user) is scaled the same way. Each editor row has a label, a text field for exact values and a MUI2 `SliderWidget`
+  of the fade band. Each editor row has a label, a text field for exact values and a MUI2 `SliderWidget`
   for quick testing, and both edit the same value. Scale sliders round to 2 decimals. The height slider covers 1..128 and the scale sliders 1..256; the
   scale text field accepts 0.1..100000. `CloudRenderer` setters only mark the config dirty (`saveLater`), and
   `saveIfDue` writes it at most once per second from the render loop. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,

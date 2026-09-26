@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GLAllocation;
@@ -25,6 +26,7 @@ import org.apache.commons.io.IOUtils;
 
 import com.cloudedhorizons.CloudedHorizons;
 import com.cloudedhorizons.Config;
+import com.cloudedhorizons.NoiseLayer;
 
 /**
  * Smoke-test GPU cloud renderer. A fragment shader generates the voxel volume into a 3D texture, one layer per draw.
@@ -140,49 +142,38 @@ public final class CloudRenderer {
         fieldChanged();
     }
 
-    public static double getNoiseMultiplier() {
-        return Config.noiseMultiplier;
+    /** The noise layers, summed before the cutoff test. Edit a layer's fields, then call {@link #fieldChanged()}. */
+    public static List<NoiseLayer> getNoiseLayers() {
+        return Config.noiseLayers;
     }
 
-    public static void setNoiseMultiplier(double multiplier) {
-        Config.noiseMultiplier = multiplier;
+    /**
+     * Adds a layer after the last one, one octave finer: half its scale and half its multiplier. Returns the new
+     * layer's index, or -1 if the maximum is reached.
+     */
+    public static int addNoiseLayer() {
+        List<NoiseLayer> layers = Config.noiseLayers;
+        if (layers.size() >= Config.MAX_NOISE_LAYERS) {
+            return -1;
+        }
+        NoiseLayer layer = layers.get(layers.size() - 1).copy();
+        layer.scaleX = Math.max(1.0D, layer.scaleX / 2.0D);
+        layer.scaleY = Math.max(1.0D, layer.scaleY / 2.0D);
+        layer.scaleZ = Math.max(1.0D, layer.scaleZ / 2.0D);
+        layer.multiplier /= 2.0D;
+        layer.offset = 0.0D;
+        layers.add(layer);
         fieldChanged();
+        return layers.size() - 1;
     }
 
-    public static double getNoiseOffset() {
-        return Config.noiseOffset;
-    }
-
-    public static void setNoiseOffset(double offset) {
-        Config.noiseOffset = offset;
-        fieldChanged();
-    }
-
-    public static double getNoiseScaleX() {
-        return Config.noiseScaleX;
-    }
-
-    public static double getNoiseScaleY() {
-        return Config.noiseScaleY;
-    }
-
-    public static double getNoiseScaleZ() {
-        return Config.noiseScaleZ;
-    }
-
-    public static void setNoiseScaleX(double voxels) {
-        Config.noiseScaleX = voxels;
-        fieldChanged();
-    }
-
-    public static void setNoiseScaleY(double voxels) {
-        Config.noiseScaleY = voxels;
-        fieldChanged();
-    }
-
-    public static void setNoiseScaleZ(double voxels) {
-        Config.noiseScaleZ = voxels;
-        fieldChanged();
+    /** Removes a layer; the last remaining layer cannot be removed. */
+    public static void removeNoiseLayer(int index) {
+        List<NoiseLayer> layers = Config.noiseLayers;
+        if (layers.size() > 1 && index >= 0 && index < layers.size()) {
+            layers.remove(index);
+            fieldChanged();
+        }
     }
 
     /** Marks the cloud settings for saving; {@link #saveIfDue()} writes them from the render loop. */
@@ -199,7 +190,8 @@ public final class CloudRenderer {
         }
     }
 
-    private static void fieldChanged() {
+    /** Call after changing a field parameter: regenerates the clouds and saves the config. */
+    public static void fieldChanged() {
         fieldDirty = true;
         saveLater();
     }
@@ -445,15 +437,22 @@ public final class CloudRenderer {
                 (float) originX,
                 (float) originZ);
         GL30.glUniform1ui(GL20.glGetUniformLocation(generateProgram, "uSeed"), SEED);
-        GL20.glUniform3f(
-                GL20.glGetUniformLocation(generateProgram, "uNoiseScale"),
-                (float) Config.noiseScaleX,
-                (float) Config.noiseScaleY,
-                (float) Config.noiseScaleZ);
+        List<NoiseLayer> layers = Config.noiseLayers;
+        GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uNoiseLayers"), layers.size());
+        for (int i = 0; i < layers.size(); i++) {
+            NoiseLayer layer = layers.get(i);
+            GL20.glUniform3f(
+                    GL20.glGetUniformLocation(generateProgram, "uLayerScale[" + i + "]"),
+                    (float) layer.scaleX,
+                    (float) layer.scaleY,
+                    (float) layer.scaleZ);
+            GL20.glUniform2f(
+                    GL20.glGetUniformLocation(generateProgram, "uLayerMulOffset[" + i + "]"),
+                    (float) layer.multiplier,
+                    (float) layer.offset);
+        }
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uCutoff"), (float) Config.cutoff);
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEdgeFade"), (float) Config.edgeFade);
-        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uNoiseMul"), (float) Config.noiseMultiplier);
-        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uNoiseOffset"), (float) Config.noiseOffset);
         GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uLayers"), allocatedLayers);
         // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));
