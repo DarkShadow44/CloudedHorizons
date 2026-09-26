@@ -31,7 +31,6 @@
 <canvas id="c"></canvas>
 <div id="panel">
   <h1>Voxel Cloud Field</h1>
-  <div class="buttons" id="presets"></div>
   <div id="controls"></div>
   <div class="buttons">
     <button id="pause">Pause</button>
@@ -40,8 +39,7 @@
   </div>
   <div id="help">
     Drag: look · WASD: move · Space / C: up / down<br>
-    Shift: fast · Wheel: fly speed · H: hide panel<br>
-    Minimap (bottom right): field value, white = cloud columns, red = camera.
+    Shift: fast · Wheel: fly speed · H: hide panel
   </div>
 </div>
 <div id="stats"></div>
@@ -62,29 +60,8 @@ const PARAM_SPEC = [
   ['Grid', 'cloudBase', 'Cloud base (Y)', 96, 320, 1, 192, null],
   ['Grid', 'thickness', 'Layer thickness', 16, 384, 8, 128, 'alloc'],
 
-  ['Field: columns', 'seed', 'Seed', 0, 999, 1, 1, 'field'],
-  ['Field: columns', 'coverage', 'Coverage', 0, 1, 0.005, 0.42, 'field'],
-  ['Field: columns', 'mapScale', 'Feature size', 50, 3000, 10, 520, 'field'],
-  ['Field: columns', 'octaves', 'Octaves', 1, 8, 1, 5, 'field'],
-  ['Field: columns', 'gain', 'Roughness', 0.2, 0.8, 0.01, 0.5, 'field'],
-  ['Field: columns', 'contrast', 'Contrast', 0.3, 3, 0.01, 1.3, 'field'],
-  ['Field: columns', 'warpScale', 'Warp size', 50, 4000, 10, 900, 'field'],
-  ['Field: columns', 'warpStrength', 'Warp strength', 0, 1500, 10, 250, 'field'],
-  ['Field: columns', 'regionScale', 'Weather size', 500, 20000, 100, 4500, 'field'],
-  ['Field: columns', 'regionStrength', 'Weather strength', 0, 1, 0.01, 0.35, 'field'],
-
-  ['Field: vertical', 'tower', 'Towering', 0, 12, 0.05, 3.0, 'field'],
-  ['Field: vertical', 'roundness', 'Top roundness', 0.2, 4, 0.01, 1.2, 'field'],
-  ['Field: vertical', 'baseFlat', 'Base flatness', 0, 1, 0.01, 0.6, 'field'],
-  ['Field: vertical', 'detailScale', 'Detail size', 8, 600, 1, 90, 'field'],
-  ['Field: vertical', 'detailStrength', 'Detail strength', 0, 1, 0.01, 0.22, 'field'],
-  ['Field: vertical', 'detailOctaves', 'Detail octaves', 0, 4, 1, 2, 'field'],
-
-  ['Motion', 'windX', 'Wind X (b/s)', -60, 60, 0.5, 6, 'field'],
-  ['Motion', 'windZ', 'Wind Z (b/s)', -60, 60, 0.5, 2, 'field'],
-  ['Motion', 'evolve', 'Morph speed', 0, 0.2, 0.001, 0.02, 'field'],
-  ['Motion', 'timeScale', 'Time scale', 0, 50, 0.1, 1, null],
-  ['Motion', 'regenInterval', 'Rebuild every (ms)', 0, 2000, 10, 120, null],
+  ['Field', 'cutout', 'Cutout', -1, 1, 0.005, 0.3, 'field'],
+  ['Field', 'morphSpeed', 'Morph speed', 0, 0.5, 0.001, 0.02, null],
 
   ['Render', 'sunAzimuth', 'Sun azimuth', 0, 360, 1, 35, null],
   ['Render', 'sunElevation', 'Sun elevation', 2, 90, 1, 40, null],
@@ -99,16 +76,11 @@ const TOGGLES = [
   ['ao', 'Voxel ambient occlusion', true],
   ['showCoarse', 'Show coarse occupancy cells', false],
   ['groundGrid', 'Chunk grid on ground', true],
-  ['minimap', 'Minimap', true],
 ];
 
-const PRESETS = {
-  'Fair cumulus': { coverage: 0.42, mapScale: 520, tower: 3.0, roundness: 1.2, detailStrength: 0.22, regionStrength: 0.35, thickness: 128, contrast: 1.3 },
-  'Towering': { coverage: 0.38, mapScale: 900, tower: 7.0, roundness: 0.7, detailStrength: 0.28, regionStrength: 0.5, thickness: 320, contrast: 1.6 },
-  'Scattered small': { coverage: 0.3, mapScale: 160, tower: 2.0, roundness: 1.5, detailStrength: 0.15, regionStrength: 0.2, thickness: 64, contrast: 1.5 },
-  'Overcast': { coverage: 0.75, mapScale: 1200, tower: 1.0, roundness: 2.5, detailStrength: 0.12, regionStrength: 0.3, thickness: 96, contrast: 1.0 },
-  'Vanilla-ish flat': { coverage: 0.45, mapScale: 200, tower: 12, roundness: 0.2, detailStrength: 0, regionStrength: 0, thickness: 16, voxelSize: 12, contrast: 3 },
-};
+// Fixed field constants (not exposed as sliders).
+const NOISE_SCALE = 256;   // simplex feature size in blocks
+const REGEN_MS = 120;      // rebuild interval while morphing
 
 const P = {};
 for (const s of PARAM_SPEC) P[s[1]] = s[6];
@@ -130,50 +102,6 @@ void main() {
 const GLSL_NOISE = `
 uniform uint uSeed;
 
-uvec3 pcg3d(uvec3 v) {
-  v = v * 1664525u + 1013904223u;
-  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-  v ^= v >> 16u;
-  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-  return v;
-}
-
-vec3 grad3(ivec3 p) {
-  uvec3 h = pcg3d(uvec3(p) + uvec3(uSeed * 7919u, uSeed * 104729u, uSeed * 15485863u));
-  return vec3(h & 0xffffu) * (2.0 / 65535.0) - 1.0;
-}
-
-// Gradient noise in roughly [-1, 1].
-float gnoise(vec3 x) {
-  vec3 fl = floor(x);
-  ivec3 i = ivec3(fl);
-  vec3 f = x - fl;
-  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-  float n000 = dot(grad3(i + ivec3(0,0,0)), f - vec3(0,0,0));
-  float n100 = dot(grad3(i + ivec3(1,0,0)), f - vec3(1,0,0));
-  float n010 = dot(grad3(i + ivec3(0,1,0)), f - vec3(0,1,0));
-  float n110 = dot(grad3(i + ivec3(1,1,0)), f - vec3(1,1,0));
-  float n001 = dot(grad3(i + ivec3(0,0,1)), f - vec3(0,0,1));
-  float n101 = dot(grad3(i + ivec3(1,0,1)), f - vec3(1,0,1));
-  float n011 = dot(grad3(i + ivec3(0,1,1)), f - vec3(0,1,1));
-  float n111 = dot(grad3(i + ivec3(1,1,1)), f - vec3(1,1,1));
-  return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-             mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 1.4;
-}
-
-// Normalised fractal sum; each octave is shifted to avoid aligned lattice artefacts.
-float fbm(vec3 p, int octaves, float gain) {
-  float sum = 0.0, amp = 1.0, norm = 0.0;
-  for (int i = 0; i < 8; i++) {
-    if (i >= octaves) break;
-    sum += amp * gnoise(p);
-    norm += amp;
-    amp *= gain;
-    p = p * 2.03 + vec3(17.13, -9.71, 5.37);
-  }
-  return norm > 0.0 ? sum / norm : 0.0;
-}
-
 uvec4 pcg4d(uvec4 v) {
   v = v * 1664525u + 1013904223u;
   v.x += v.y * v.w; v.y += v.z * v.x; v.z += v.x * v.y; v.w += v.y * v.z;
@@ -182,107 +110,66 @@ uvec4 pcg4d(uvec4 v) {
   return v;
 }
 
-float corner4(ivec4 i, vec4 f, ivec4 o) {
-  uvec4 h = pcg4d(uvec4(i + o) + uvec4(uSeed * 7919u, uSeed * 104729u, uSeed * 15485863u, uSeed * 32452843u));
+// Pseudo-random unit gradient for a 4D lattice point.
+vec4 grad4(vec4 p) {
+  uvec4 h = pcg4d(uvec4(ivec4(p)) + uvec4(uSeed * 7919u, uSeed * 104729u, uSeed * 15485863u, uSeed * 32452843u));
   vec4 g = vec4(h & 0xffffu) * (2.0 / 65535.0) - 1.0;
-  return dot(g, f - vec4(o));
+  return g * inversesqrt(max(dot(g, g), 1e-6));
 }
 
-// 4D gradient noise in roughly [-1, 1]. The fourth axis is time: moving along it changes a 3D field in place
+// 4D simplex noise in roughly [-1, 1]. The fourth axis is time: moving along it changes the 3D field in place
 // without translating it in space.
-float gnoise4(vec4 x) {
-  vec4 fl = floor(x);
-  ivec4 i = ivec4(fl);
-  vec4 f = x - fl;
-  vec4 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-  float r[2];
-  for (int w = 0; w < 2; w++) {
-    float n000 = corner4(i, f, ivec4(0, 0, 0, w));
-    float n100 = corner4(i, f, ivec4(1, 0, 0, w));
-    float n010 = corner4(i, f, ivec4(0, 1, 0, w));
-    float n110 = corner4(i, f, ivec4(1, 1, 0, w));
-    float n001 = corner4(i, f, ivec4(0, 0, 1, w));
-    float n101 = corner4(i, f, ivec4(1, 0, 1, w));
-    float n011 = corner4(i, f, ivec4(0, 1, 1, w));
-    float n111 = corner4(i, f, ivec4(1, 1, 1, w));
-    r[w] = mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-           mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
-  }
-  return mix(r[0], r[1], u.w) * 1.3;
-}
+float snoise4(vec4 v) {
+  const float F4 = 0.30901699437; // (sqrt(5) - 1) / 4
+  const float G4 = 0.13819660113; // (5 - sqrt(5)) / 20
+  vec4 s = floor(v + dot(v, vec4(F4)));
+  vec4 x0 = v - s + dot(s, vec4(G4));
 
-float fbm4(vec4 p, int octaves, float gain) {
-  float sum = 0.0, amp = 1.0, norm = 0.0;
-  for (int i = 0; i < 8; i++) {
-    if (i >= octaves) break;
-    sum += amp * gnoise4(p);
-    norm += amp;
-    amp *= gain;
-    p = p * 2.03 + vec4(17.13, -9.71, 5.37, 3.19);
+  // Rank the components of x0; the simplex corners are visited in descending order.
+  vec4 rank = vec4(0.0);
+  vec3 gx = step(x0.yzw, x0.xxx);
+  rank.x += gx.x + gx.y + gx.z;
+  rank.yzw += 1.0 - gx;
+  vec3 gyz = step(x0.zww, x0.yyz);
+  rank.y += gyz.x + gyz.y;
+  rank.zw += 1.0 - gyz.xy;
+  rank.z += gyz.z;
+  rank.w += 1.0 - gyz.z;
+  vec4 i1 = clamp(rank - 2.0, 0.0, 1.0);
+  vec4 i2 = clamp(rank - 1.0, 0.0, 1.0);
+  vec4 i3 = clamp(rank, 0.0, 1.0);
+
+  vec4 x1 = x0 - i1 + G4;
+  vec4 x2 = x0 - i2 + 2.0 * G4;
+  vec4 x3 = x0 - i3 + 3.0 * G4;
+  vec4 x4 = x0 - 1.0 + 4.0 * G4;
+
+  vec4 o[5] = vec4[5](vec4(0.0), i1, i2, i3, vec4(1.0));
+  vec4 x[5] = vec4[5](x0, x1, x2, x3, x4);
+  float n = 0.0;
+  for (int k = 0; k < 5; k++) {
+    float t = 0.6 - dot(x[k], x[k]);
+    if (t > 0.0) { t *= t; n += t * t * dot(grad4(s + o[k]), x[k]); }
   }
-  return norm > 0.0 ? sum / norm : 0.0;
+  return n * 27.0;
 }
 `;
 
-// Pass 1: 2D column field. One texel per voxel column (x, z).
-// r = column strength (> 0 means the column can hold cloud), g = raw noise, b = weather modulation.
-const FS_COLUMN = `#version 300 es
-precision highp float;
-precision highp int;
-${GLSL_NOISE}
-uniform float uVS, uT, uEvolve, uMapScale, uGain, uContrast, uWarpScale, uWarpStrength;
-uniform float uRegionScale, uRegionStrength, uCoverage;
-uniform int uOctaves;
-uniform vec2 uWind;
-out vec4 outColor;
-void main() {
-  vec2 xz = (floor(gl_FragCoord.xy) + 0.5) * uVS;
-  vec2 q = xz - uWind * uT;
-  float ev = uT * uEvolve;
-
-  vec2 warp = vec2(fbm(vec3(q / uWarpScale, ev * 0.7 + 11.3), 3, 0.5),
-                   fbm(vec3(q / uWarpScale + 37.1, ev * 0.7 - 5.2), 3, 0.5)) * uWarpStrength;
-  float m = fbm(vec3((q + warp) / uMapScale, ev), uOctaves, uGain) * 0.5 * uContrast + 0.5;
-  float region = fbm(vec3(q / uRegionScale + 91.7, ev * 0.3 + 3.1), 3, 0.5);
-  float cov = m + region * uRegionStrength - (1.0 - uCoverage);
-  outColor = vec4(cov, m, region, 1.0);
-}`;
-
-// Pass 2: 3D voxel field, one draw per horizontal layer (y). Writes 1 for solid, 0 for empty.
+// Pass 1: 3D voxel field, one draw per horizontal layer (y). Writes 1 for solid, 0 for empty.
 const FS_VOXEL = `#version 300 es
 precision highp float;
 precision highp int;
 ${GLSL_NOISE}
-uniform highp sampler2D uColumn;
-uniform int uLayer, uDetailOctaves;
-uniform float uVS, uT, uEvolve, uThickness, uTower, uRoundness, uBaseFlat, uDetailScale, uDetailStrength;
-uniform vec2 uWind;
+uniform int uLayer;
+uniform float uVS, uPhase, uScale, uCutout;
 out vec4 outColor;
 void main() {
-  ivec2 cell = ivec2(gl_FragCoord.xy);
-  float cov = texelFetch(uColumn, cell, 0).r;
-  // Cheap reject: detail can add at most uDetailStrength.
-  if (cov + uDetailStrength <= 0.0) { outColor = vec4(0.0); return; }
-
-  float y = (float(uLayer) + 0.5) * uVS;
-  float h = clamp(y / uThickness, 0.0, 1.0);
-  float colH = clamp(cov * uTower, 0.0, 1.0);
-
-  // Height profile: column top at h = colH^(1/roundness). The base is flat when detail is suppressed near h = 0.
-  float d = colH - pow(h, uRoundness);
-
-  if (uDetailOctaves > 0 && uDetailStrength > 0.0) {
-    vec3 p = vec3((vec2(cell) + 0.5) * uVS, y);
-    vec3 q = vec3(p.x - uWind.x * uT, p.z, p.y - uWind.y * uT) / uDetailScale;
-    float detail = fbm4(vec4(q, uT * uEvolve * 3.0), uDetailOctaves, 0.5);
-    float baseMask = mix(1.0, smoothstep(0.0, 0.25, h), uBaseFlat);
-    // Bottom stays flat: below the base mask detail can only erode, not add.
-    d += detail * uDetailStrength * (detail > 0.0 ? baseMask : 1.0);
-  }
-  outColor = vec4(d > 0.0 ? 1.0 : 0.0);
+  vec3 p = vec3((floor(gl_FragCoord.x) + 0.5) * uVS, (float(uLayer) + 0.5) * uVS, (floor(gl_FragCoord.y) + 0.5) * uVS);
+  float n = snoise4(vec4(p / uScale, uPhase));
+  outColor = vec4(n > uCutout ? 1.0 : 0.0);
 }`;
 
-// Pass 3: coarse occupancy (max over a COARSE block of voxels) for empty-space skipping.
+// Pass 2: coarse occupancy (max over a COARSE block of voxels) for empty-space skipping.
 const FS_COARSE = `#version 300 es
 precision highp float;
 precision highp int;
@@ -467,31 +354,6 @@ void main() {
   outColor = vec4(pow(col, vec3(1.0 / 1.1)), 1.0);
 }`;
 
-// Minimap: shows the column field.
-const FS_MINIMAP = `#version 300 es
-precision highp float;
-uniform highp sampler2D uColumn;
-uniform vec4 uRect; // x, y, w, h in pixels
-uniform vec2 uCamXZ;
-uniform vec2 uCamDir;
-uniform float uWorld, uTower;
-out vec4 outColor;
-void main() {
-  vec2 uv = (gl_FragCoord.xy - uRect.xy) / uRect.zw;
-  vec4 f = texture(uColumn, uv);
-  float cov = f.r;
-  vec3 col = cov > 0.0 ? mix(vec3(0.75), vec3(1.0), clamp(cov * uTower, 0.0, 1.0))
-                       : mix(vec3(0.05, 0.10, 0.22), vec3(0.25, 0.40, 0.65), clamp(f.g, 0.0, 1.0));
-  vec2 camUv = uCamXZ / uWorld;
-  vec2 dpx = (uv - camUv) * uRect.zw;
-  float r = length(dpx);
-  if (r < 3.5) col = vec3(1.0, 0.2, 0.2);
-  else if (r < 16.0 && dot(normalize(dpx), normalize(uCamDir)) > 0.96) col = vec3(1.0, 0.55, 0.2);
-  vec2 e = min(uv, 1.0 - uv) * uRect.zw;
-  if (min(e.x, e.y) < 1.5) col = vec3(0.6);
-  outColor = vec4(col, 1.0);
-}`;
-
 // ---------------------------------------------------------------------------------------------------------------------
 // GL setup
 // ---------------------------------------------------------------------------------------------------------------------
@@ -507,7 +369,6 @@ function fail(msg) {
 }
 
 if (!gl) fail('WebGL2 is not available.');
-if (!gl.getExtension('EXT_color_buffer_float')) fail('EXT_color_buffer_float is required for the column field pass.');
 const MAX_3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
 const MAX_2D = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
@@ -536,11 +397,9 @@ function program(fsSrc) {
   return p;
 }
 
-const progColumn = program(FS_COLUMN);
 const progVoxel = program(FS_VOXEL);
 const progCoarse = program(FS_COARSE);
 const progRender = program(FS_RENDER);
-const progMinimap = program(FS_MINIMAP);
 
 gl.bindVertexArray(gl.createVertexArray());
 const fbo = gl.createFramebuffer();
@@ -563,7 +422,7 @@ function makeTex(target, internalFormat, w, h, d) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Textures are laid out (x, z, y) so that each generation draw writes one horizontal layer.
-const grid = { nx: 0, ny: 0, nz: 0, cx: 0, cy: 0, cz: 0, vs: 0, column: null, fine: null, coarse: null };
+const grid = { nx: 0, ny: 0, nz: 0, cx: 0, cy: 0, cz: 0, vs: 0, fine: null, coarse: null };
 
 function minVoxelSize() {
   return Math.ceil(P.worldSize / Math.min(MAX_3D, MAX_2D));
@@ -573,22 +432,13 @@ function allocate() {
   const vs = Math.max(P.voxelSize, minVoxelSize());
   const nx = Math.ceil(P.worldSize / vs);
   const ny = Math.max(1, Math.ceil(P.thickness / vs));
-  for (const t of [grid.column, grid.fine, grid.coarse]) if (t) gl.deleteTexture(t);
+  for (const t of [grid.fine, grid.coarse]) if (t) gl.deleteTexture(t);
   Object.assign(grid, {
     vs, nx, ny, nz: nx,
     cx: Math.ceil(nx / COARSE[0]), cy: Math.ceil(ny / COARSE[1]), cz: Math.ceil(nx / COARSE[2]),
   });
-  grid.column = makeTex(gl.TEXTURE_2D, gl.RGBA16F, grid.nx, grid.nz);
   grid.fine = makeTex(gl.TEXTURE_3D, gl.R8, grid.nx, grid.nz, grid.ny);
   grid.coarse = makeTex(gl.TEXTURE_3D, gl.R8, grid.cx, grid.cz, grid.cy);
-}
-
-function setFieldUniforms(p) {
-  gl.uniform1ui(p.u('uSeed'), P.seed);
-  gl.uniform1f(p.u('uVS'), grid.vs);
-  gl.uniform1f(p.u('uT'), simTime);
-  gl.uniform1f(p.u('uEvolve'), P.evolve);
-  gl.uniform2f(p.u('uWind'), P.windX, P.windZ);
 }
 
 function regenerate() {
@@ -601,35 +451,14 @@ function regenerate() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
   gl.disable(gl.BLEND);
 
-  // Column field.
-  gl.useProgram(progColumn);
-  setFieldUniforms(progColumn);
-  gl.uniform1f(progColumn.u('uMapScale'), P.mapScale);
-  gl.uniform1i(progColumn.u('uOctaves'), P.octaves);
-  gl.uniform1f(progColumn.u('uGain'), P.gain);
-  gl.uniform1f(progColumn.u('uContrast'), P.contrast);
-  gl.uniform1f(progColumn.u('uWarpScale'), P.warpScale);
-  gl.uniform1f(progColumn.u('uWarpStrength'), P.warpStrength);
-  gl.uniform1f(progColumn.u('uRegionScale'), P.regionScale);
-  gl.uniform1f(progColumn.u('uRegionStrength'), P.regionStrength);
-  gl.uniform1f(progColumn.u('uCoverage'), P.coverage);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, grid.column, 0);
-  gl.viewport(0, 0, grid.nx, grid.nz);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
-
   // Voxel layers.
   gl.useProgram(progVoxel);
-  setFieldUniforms(progVoxel);
-  gl.uniform1f(progVoxel.u('uThickness'), grid.ny * grid.vs);
-  gl.uniform1f(progVoxel.u('uTower'), P.tower);
-  gl.uniform1f(progVoxel.u('uRoundness'), P.roundness);
-  gl.uniform1f(progVoxel.u('uBaseFlat'), P.baseFlat);
-  gl.uniform1f(progVoxel.u('uDetailScale'), P.detailScale);
-  gl.uniform1f(progVoxel.u('uDetailStrength'), P.detailStrength);
-  gl.uniform1i(progVoxel.u('uDetailOctaves'), P.detailOctaves);
-  gl.uniform1i(progVoxel.u('uColumn'), 0);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, grid.column);
+  gl.uniform1ui(progVoxel.u('uSeed'), 1);
+  gl.uniform1f(progVoxel.u('uVS'), grid.vs);
+  gl.uniform1f(progVoxel.u('uPhase'), morphPhase);
+  gl.uniform1f(progVoxel.u('uScale'), NOISE_SCALE);
+  gl.uniform1f(progVoxel.u('uCutout'), P.cutout);
+  gl.viewport(0, 0, grid.nx, grid.nz);
   for (let y = 0; y < grid.ny; y++) {
     gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, grid.fine, 0, y);
     gl.uniform1i(progVoxel.u('uLayer'), y);
@@ -709,7 +538,7 @@ function updateCamera(dt) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 let fieldDirty = true, allocDirty = true, paused = false;
-let simTime = 0, lastRegen = 0;
+let morphPhase = 0, lastRegen = 0;
 const outputs = {}, inputs = {};
 
 function fmt(v, step) {
@@ -758,19 +587,6 @@ function buildUI() {
     inp.addEventListener('change', () => { P[key] = inp.checked; });
     lab.append(inp, label);
     root.appendChild(lab);
-  }
-
-  const presets = document.getElementById('presets');
-  for (const [name, values] of Object.entries(PRESETS)) {
-    const b = document.createElement('button');
-    b.textContent = name;
-    b.addEventListener('click', () => {
-      for (const s of PARAM_SPEC) if (!(s[1] in values) && s[7] && s[1] !== 'seed') P[s[1]] = s[6];
-      Object.assign(P, values);
-      syncUI();
-      allocDirty = fieldDirty = true;
-    });
-    presets.appendChild(b);
   }
 
   const pauseBtn = document.getElementById('pause');
@@ -836,22 +652,8 @@ function render() {
   gl.uniform1i(u('uGroundGrid'), P.groundGrid ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.activeTexture(gl.TEXTURE0);
-
-  if (P.minimap) {
-    const size = Math.round(Math.min(canvas.width, canvas.height) * 0.28);
-    const x = canvas.width - size - 8, y = 8;
-    gl.viewport(x, y, size, size);
-    gl.useProgram(progMinimap);
-    gl.bindTexture(gl.TEXTURE_2D, grid.column);
-    gl.uniform1i(progMinimap.u('uColumn'), 0);
-    gl.uniform4f(progMinimap.u('uRect'), x, y, size, size);
-    gl.uniform2f(progMinimap.u('uCamXZ'), cam.x, cam.z);
-    gl.uniform2f(progMinimap.u('uCamDir'), Math.sin(cam.yaw), Math.cos(cam.yaw));
-    gl.uniform1f(progMinimap.u('uWorld'), grid.nx * grid.vs);
-    gl.uniform1f(progMinimap.u('uTower'), P.tower);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  }
 }
+
 
 function frame(now) {
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
@@ -860,9 +662,9 @@ function frame(now) {
   if (fpsAcc > 0.5) { fps = fpsFrames / fpsAcc; fpsAcc = 0; fpsFrames = 0; }
 
   updateCamera(dt);
-  if (!paused && P.timeScale > 0) {
-    simTime += dt * P.timeScale;
-    if ((P.evolve > 0 || P.windX !== 0 || P.windZ !== 0) && now - lastRegen >= P.regenInterval) fieldDirty = true;
+  if (!paused && P.morphSpeed > 0) {
+    morphPhase += dt * P.morphSpeed;
+    if (now - lastRegen >= REGEN_MS) fieldDirty = true;
   }
   resize();
   if (allocDirty) { allocate(); allocDirty = false; fieldDirty = true; }
@@ -878,7 +680,7 @@ function frame(now) {
     `voxel ${grid.vs} blocks${clamped}\n` +
     `coarse ${grid.cx} x ${grid.cy} x ${grid.cz}\n` +
     `camera ${cam.x.toFixed(0)} ${cam.y.toFixed(0)} ${cam.z.toFixed(0)}  speed ${cam.speed.toFixed(0)}\n` +
-    `time ${simTime.toFixed(1)} s${paused ? ' (paused)' : ''}` +
+    `morph phase ${morphPhase.toFixed(3)}${paused ? ' (paused)' : ''}` +
     (regenMs !== null ? `\nrebuild submit ${regenMs.toFixed(1)} ms` : '');
   requestAnimationFrame(frame);
 }

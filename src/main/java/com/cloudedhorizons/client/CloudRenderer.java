@@ -156,7 +156,7 @@ public final class CloudRenderer {
 
     private static void initialize(Minecraft mc) {
         initialized = true;
-        generateProgram = createProgram("fullscreen.vsh", "generate.fsh");
+        generateProgram = createProgram("fullscreen.vsh", "generate.fsh", "noise.fsh");
         volumeProgram = createProgram("volume.vsh", "volume.fsh");
         emptyVao = GL30.glGenVertexArrays();
         createCube();
@@ -217,7 +217,6 @@ public final class CloudRenderer {
         GL11.glDisable(GL11.GL_CULL_FACE);
 
         GL20.glUseProgram(generateProgram);
-        GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uHeight"), SIZE_Y);
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uVS"), VOXEL_SIZE);
         GL20.glUniform2f(
                 GL20.glGetUniformLocation(generateProgram, "uOriginXZ"),
@@ -282,18 +281,27 @@ public final class CloudRenderer {
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
     }
 
-    private static int createProgram(String vertexName, String fragmentName) {
-        int vertex = compileShader(GL20.GL_VERTEX_SHADER, vertexName);
-        int fragment = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentName);
+    /**
+     * Links a program from one vertex shader and one or more fragment shader objects. Extra fragment shaders hold
+     * shared functions (e.g. noise.fsh) that the main one declares as prototypes.
+     */
+    private static int createProgram(String vertexName, String... fragmentNames) {
         int program = GL20.glCreateProgram();
-        GL20.glAttachShader(program, vertex);
-        GL20.glAttachShader(program, fragment);
+        int[] shaders = new int[fragmentNames.length + 1];
+        shaders[0] = compileShader(GL20.GL_VERTEX_SHADER, vertexName);
+        for (int i = 0; i < fragmentNames.length; i++) {
+            shaders[i + 1] = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentNames[i]);
+        }
+        for (int shader : shaders) {
+            GL20.glAttachShader(program, shader);
+        }
         GL20.glLinkProgram(program);
-        GL20.glDeleteShader(vertex);
-        GL20.glDeleteShader(fragment);
+        for (int shader : shaders) {
+            GL20.glDeleteShader(shader);
+        }
         if (GL20.glGetProgrami(program, GL20.GL_LINK_STATUS) == GL11.GL_FALSE) {
             throw new IllegalStateException(
-                    "Link failed (" + vertexName + ", " + fragmentName + "): "
+                    "Link failed (" + vertexName + ", " + String.join(", ", fragmentNames) + "): "
                             + GL20.glGetProgramInfoLog(program, 8192));
         }
         return program;

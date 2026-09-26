@@ -58,16 +58,20 @@ cumulus clouds.
 
 ### Web demo design (webdemo/index.html)
 
+- Rebuilt from scratch on 2026-09-26 as the start of the real cloud build. The old column field, height profile,
+  presets, wind and minimap were removed.
 - The world is a square field, 10000 blocks by default, and uses a voxel grid whose voxel edge is an integer number
   of blocks (8 by default). The GPU 3D texture size limit sets the smallest allowed voxel size.
-- The field is built in three GPU passes:
-  1. A 2D column field (RGBA16F): domain-warped fBm gradient noise, plus a low-frequency "weather" modulation, minus a
-     coverage threshold. Values above 0 mark columns that can hold cloud.
-  2. The voxel layers (R8 3D texture, laid out x,z,y): a height profile `clamp(cov*tower) - h^roundness` plus 3D
-     detail noise. The detail is kept from adding volume near the base so the base stays flat. A voxel is solid
-     when the result is above 0.
-  3. Coarse occupancy (8x4x8 voxels) for empty-space skipping.
-- The field morphs over time through wind offset and a time-evolved noise axis. The grid is rebuilt every
-  `regenInterval` ms.
+- Field: one octave of 4D simplex noise, `snoise4(worldPos / NOISE_SCALE, morphPhase)`. A voxel is solid when the
+  noise is above `cutout`. `NOISE_SCALE` (256 blocks) and the seed are fixed constants.
+- Morphing: `morphPhase += dt * morphSpeed` (default 0.02/s, like the mod). No wind. The volume is rebuilt every
+  `REGEN_MS` (120 ms) while morphing.
+- The UI has only Grid sliders (world size, voxel size, base, thickness), Field sliders (cutout, morph speed), Render
+  sliders, and debug toggles.
+- Passes: voxel layers (R8 3D texture, laid out x,z,y), then coarse occupancy (8x4x8) for empty-space skipping.
 - Rendering is a fullscreen DDA raycast with coarse skipping, face shading, traced sun shadows (also cast on the
   ground), and per-face voxel AO and fog.
+- The mod uses the same field. The simplex noise is in its own shader, `shaders/noise.fsh`, which is compiled as a
+  separate fragment shader object and linked into the generate program (`createProgram` takes several fragment
+  shaders). `generate.fsh` only declares the `snoise4` prototype and has `NOISE_SCALE` 256 and `CUTOUT` 0.3 as
+  constants. The morph phase (`uEvolve`) is used at x1, as in the demo.

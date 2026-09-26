@@ -69,3 +69,15 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   time offset was added to its world-Z axis, which translated it. The fix uses 4D gradient noise with time as the
   fourth axis (agent proposal), in both the webdemo and `generate.fsh`.
 - **User requirement — 2026-09-26:** Make the cloud settings persistent: mainly height, but also morph speed.
+
+### Simplex cloud field (web demo rebuild)
+
+- **User requirement — 2026-09-26:** Start building the clouds in the web demo from simplex noise. Keep only the
+  grid, the render sliders and a cutout slider. Morphing stays, and so does the morph speed.
+- **Agent proposal — 2026-09-26:** 4D simplex noise (skewed simplex lattice, corner order by component ranking,
+  radial falloff `(0.6 - r^2)^4`) with time as the fourth axis, PCG-hashed unit gradients, a fixed 256-block feature
+  size, and a 120 ms rebuild interval. All of these come from the agent's general graphics knowledge; no web sources
+  were used.
+- **User requirement — 2026-09-26:** Use the same noise in the mod, and put the noise in a separate shader.
+- **Agent proposal — 2026-09-26:** Link `noise.fsh` into the program as a second fragment shader object instead of
+  pasting the source in with an include preprocessor.
