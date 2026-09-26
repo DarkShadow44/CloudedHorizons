@@ -123,3 +123,10 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **Agent proposal — 2026-09-26:** Keep height, edge fade and morph speed global. Give each layer a fixed 4D domain
   shift so layers differ. A new layer is one octave finer (half the scale and multiplier). Layer tabs rebuild the
   screen by reopening it. Old single-layer config keys migrate into layer 1.
+- **User requirement — 2026-09-26:** Make the simplex noise span -1..1.
+- **Agent analysis — 2026-09-26:** With unit-length gradients, `snoise4` scaled by 27 peaks at about ±0.618 (numerical
+  maximisation of `27 * sum t^4 |x|` over the simplex cell, gradients aligned). The scale is now 27 / 0.61823 = 43.674
+  in `noise.fsh` and the web demo, and the edge-fade ramp top per layer went from 0.6 to 0.97 (same ratio).
+- **Agent measurement — 2026-09-26:** Sampled the rescaled `snoise4` (numpy port, 10M points each for seeds 0, 1,
+  12345): extremes about ±0.97, std 0.278, |n| percentiles 50/90/99/99.9/99.99% = 0.16/0.48/0.75/0.86/0.90, about
+  0.23% above 0.8. The bell-shaped distribution is expected for simplex noise. The 0.97 fade top matches the sampled peak.

@@ -34,11 +34,11 @@ void main() {
         vec4 shift = float(i) * vec4(1731.7, 911.3, 2179.1, 537.9);
         vec2 mo = uLayerMulOffset[i];
         n += snoise4(vec4(v / max(uLayerScale[i], vec3(1e-3)), uEvolve) + shift) * mo.x + mo.y;
-        peak += 0.6 * abs(mo.x) + mo.y;
+        peak += 0.97 * abs(mo.x) + mo.y;
     }
 
-    // This simplex implementation rarely reaches 0.6 (sampled peak ~0.55) per layer, so a ramp to 1.0 removes almost all
-    // clouds in the first few fade layers. End the ramp near the actual noise range to use the whole fade distance.
+    // The noise is scaled to [-1, 1], but a single layer is bell-shaped (std 0.28, 99.9% within 0.86, sampled extremes
+    // ~0.97), so a ramp to far above that removes almost all clouds early. End the ramp at 0.97, the sampled peak.
     // Measure from layer centers so both outermost layers are empty instead of leaving a thin clipped cap.
     float threshold = uCutoff;
     bool fadeEnabled = uEdgeFade >= 1.0 && uLayers >= 3;

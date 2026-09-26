@@ -71,12 +71,12 @@ Rendering code and mixins must be compatible with that environment.
   `noiseMultiplier`, `noiseOffset`) are migrated into layer 1 on load. In the editor, global rows come first, then a
   layer bar (number buttons select a layer, "+" adds one octave finer: half the scale and multiplier of the last
   layer, "-" removes the selected one; the screen is reopened to rebuild), then the selected layer's rows. The edge
-  fade's ramp top is the sum of `0.6*|mul| + offset` over the layers. `CloudRenderer.fieldChanged()` is public so the
+  fade's ramp top is the sum of `0.97*|mul| + offset` over the layers. `CloudRenderer.fieldChanged()` is public so the
   editor can signal layer edits. Cutoff (`Config.cutoff`, key `clouds.cutoff`, default 0.3, slider -1..1, field -10..10) is a global editor row; a
   voxel is solid where the summed layers are above it. Edge fade (`Config.edgeFade`, key `clouds.edgeFade`, voxels, default 0, slider 0..32, field
-  0..128) raises the threshold from the cutoff to at least 0.6 at the outermost voxel layers, which are forced empty.
-  The effective fade width is limited to half the field height. The 0.6 endpoint was chosen after a local sample of
-  the shader's simplex noise peaked near 0.55; the prior ramps to a bias of 2 and then a cutoff of 1.0 emptied most
+  0..128) raises the threshold from the cutoff to at least 0.97 at the outermost voxel layers, which are forced empty.
+  The effective fade width is limited to half the field height. The endpoint (0.6 before the noise was rescaled to [-1, 1], now 0.97) was chosen after a local sample of
+  the shader's simplex noise peaked near 0.55; after rescaling, 30M samples (seeds 0, 1, 12345) show extremes of about ±0.97, std 0.278, |n| percentiles 50/90/99/99.9% = 0.16/0.48/0.75/0.86; the prior ramps to a bias of 2 and then a cutoff of 1.0 emptied most
   of the fade band. Each editor row has a label, a text field for exact values and a MUI2 `SliderWidget`
   for quick testing, and both edit the same value. Scale sliders round to 2 decimals. The height slider covers 1..128 and the scale sliders 1..256; the
   scale text field accepts 0.1..100000. `CloudRenderer` setters only mark the config dirty (`saveLater`), and

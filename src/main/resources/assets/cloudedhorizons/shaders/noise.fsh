@@ -21,7 +21,7 @@ vec4 grad4(vec4 p) {
     return g * inversesqrt(max(dot(g, g), 1e-6));
 }
 
-// 4D simplex noise in roughly [-1, 1]. The fourth axis is time: moving along it changes the 3D field in place
+// 4D simplex noise in [-1, 1] (the bound is only reached when all corner gradients line up). The fourth axis is time: moving along it changes the 3D field in place
 // without translating it in space.
 float snoise4(vec4 v) {
     const float F4 = 0.30901699437; // (sqrt(5) - 1) / 4
@@ -55,5 +55,5 @@ float snoise4(vec4 v) {
         float t = 0.6 - dot(x[k], x[k]);
         if (t > 0.0) { t *= t; n += t * t * dot(grad4(s + o[k]), x[k]); }
     }
-    return n * 27.0;
+    return n * 43.674; // 27 / 0.61823: with unit gradients the unscaled peak is 0.61823/27, so this maps it to 1
 }
