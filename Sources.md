@@ -63,3 +63,8 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **Agent proposal — 2026-09-26:** Advance the morph phase from game-time deltas so it pauses with the game and speed
   changes don't make it jump, and throttle regeneration to every 2 ticks.
 - **User requirement — 2026-09-26:** Add `/clouds height [y]`, which works the same way as `/clouds morph` but for the cloud height.
+- **User requirement — 2026-09-26:** A hack so fly speed also affects rising and sinking. The hook point (the 0.15
+  constant in `EntityPlayerSP.onLivingUpdate`) comes from the local decompiled sources.
+- **Experiment — 2026-09-26:** The user saw the clouds drifting in one direction. The cause was that the detail noise's
+  time offset was added to its world-Z axis, which translated it. The fix uses 4D gradient noise with time as the
+  fourth axis (agent proposal), in both the webdemo and `generate.fsh`.

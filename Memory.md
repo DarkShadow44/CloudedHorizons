@@ -42,6 +42,8 @@ Rendering code and mixins must be compatible with that environment.
   The client command `/clouds morph [speed]` gets or sets the speed, and `/clouds height [y]` gets or sets the
   volume's base Y (default 160; placement only, no regeneration). The command is registered in
   `ClientProxy.init`.
+- Dev hack `MixinEntityPlayerSP`: scales the creative-flight rise/sink impulse (vanilla 0.15 per tick) by
+  flySpeed / 0.05, so fly speed also affects vertical flight.
 - `gradle.properties` `mixinsPackage` is relative to `modGroup` (`mixin`, not the full package).
   The mixin config is `src/main/resources/mixins.cloudedhorizons.json`.
 - A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been
