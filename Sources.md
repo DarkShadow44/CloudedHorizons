@@ -130,3 +130,13 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **Agent measurement — 2026-09-26:** Sampled the rescaled `snoise4` (numpy port, 10M points each for seeds 0, 1,
   12345): extremes about ±0.97, std 0.278, |n| percentiles 50/90/99/99.9/99.99% = 0.16/0.48/0.75/0.86/0.90, about
   0.23% above 0.8. The bell-shaped distribution is expected for simplex noise. The 0.97 fade top matches the sampled peak.
+
+### GPU mesher
+
+- **User requirement — 2026-09-26:** Replace the raymarching with a custom mesher, so LODs can be used later. Do it
+  all on the GPU, and render the mesh (the user chose this over CPU-meshing options).
+- **Agent proposal — 2026-09-26:** Compute-shader face culling mesher (count, prefix sum, emit), per-chunk ranges and
+  indirect draw commands for 32x32 column chunks, vertex pulling from an SSBO, and glMultiDrawArraysIndirect.
+  Requires OpenGL 4.3. All of this comes from the agent's general graphics knowledge.
+- **Experiment — 2026-09-26:** The user saw a line across the screen, with the shading changing beyond a distance. Cause: depth clamp gave every face beyond Minecraft's far plane the same depth.
+- **User decision — 2026-09-26:** Fix it by extending the far plane through a mixin (chosen over the agent's proposal of a separate cloud buffer with log depth).

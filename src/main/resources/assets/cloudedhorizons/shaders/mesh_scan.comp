@@ -1,0 +1,61 @@
+#version 430 core
+// Runs between the mesher's count and emit passes, as a single workgroup. Turns the per-chunk face counts into
+// offsets in the face buffer (exclusive prefix sum), writes one indirect draw command per chunk, and resets the
+// counters for the next meshing.
+
+layout(local_size_x = 1024) in;
+
+uniform uint uChunkCount;
+uniform uint uCapacity; // faces the face buffer can hold
+
+struct Chunk {
+    uint count;
+    uint offset;
+    uint cursor;
+    uint pad;
+};
+
+// Layout of glMultiDrawArraysIndirect commands.
+struct DrawCommand {
+    uint count;
+    uint instanceCount;
+    uint first;
+    uint baseInstance;
+};
+
+layout(std430, binding = 1) buffer Chunks { Chunk chunks[]; };
+layout(std430, binding = 2) writeonly buffer Draws { DrawCommand draws[]; };
+
+shared uint sSums[1024];
+
+void main() {
+    uint t = gl_LocalInvocationID.x;
+    uint per = (uChunkCount + 1023u) / 1024u;
+    uint begin = min(t * per, uChunkCount);
+    uint end = min(begin + per, uChunkCount);
+
+    uint sum = 0u;
+    for (uint i = begin; i < end; i++) sum += chunks[i].count;
+    sSums[t] = sum;
+    barrier();
+
+    // Inclusive scan over the 1024 partial sums.
+    for (uint o = 1u; o < 1024u; o <<= 1) {
+        uint v = t >= o ? sSums[t - o] : 0u;
+        barrier();
+        sSums[t] += v;
+        barrier();
+    }
+
+    uint offset = sSums[t] - sum;
+    for (uint i = begin; i < end; i++) {
+        uint n = chunks[i].count;
+        chunks[i].offset = offset;
+        chunks[i].cursor = 0u;
+        chunks[i].count = 0u;
+        uint drawn = offset >= uCapacity ? 0u : min(n, uCapacity - offset);
+        // 6 vertices (two triangles) per face; mesh.vsh derives the face from gl_VertexID.
+        draws[i] = DrawCommand(drawn * 6u, 1u, offset * 6u, 0u);
+        offset += n;
+    }
+}

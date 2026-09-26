@@ -14,13 +14,16 @@ import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
-import org.lwjgl.opengl.GL32;
+import org.lwjgl.opengl.GL40;
+import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL43;
 
 import org.apache.commons.io.IOUtils;
 
@@ -29,12 +32,19 @@ import com.cloudedhorizons.Config;
 import com.cloudedhorizons.NoiseLayer;
 
 /**
- * Smoke-test GPU cloud renderer. A fragment shader generates the voxel volume into a 3D texture, one layer per draw.
- * A coarse occupancy grid ({@link #COARSE_X} x {@link #COARSE_Y} x {@link #COARSE_Z} voxels per cell) lets the
- * raymarch skip empty space. The field's time axis advances at {@link #getMorphSpeed()}. Regeneration is spread over
- * frames: each frame rebuilds one slab of {@link #COARSE_Y} layers plus its coarse layer, and a new pass starts every
- * {@link #REGEN_INTERVAL_TICKS} ticks at most while the clouds morph. Each frame, the volume's bounding box is drawn
- * and a DDA raymarch finds the voxel surface and writes its depth.
+ * GPU cloud renderer (needs OpenGL 4.3).
+ * <ol>
+ * <li>Generation: a fragment shader writes the voxel field into a 3D texture, one layer per draw. Regeneration is
+ * spread over frames, one slab of {@link #SLAB_LAYERS} layers per frame, and a new pass starts every
+ * {@link #REGEN_INTERVAL_TICKS} ticks at most while the clouds morph (the field's time axis advances at
+ * {@link #getMorphSpeed()}).</li>
+ * <li>Meshing: after each complete pass, compute shaders turn the voxels into faces (one quad per solid voxel side
+ * next to empty space), grouped per chunk of {@link #CHUNK_SIZE} x {@link #CHUNK_SIZE} voxel columns. Each chunk
+ * has its own range of the face buffer and its own indirect draw command, so chunks can later get their own LOD or
+ * be culled.</li>
+ * <li>Drawing: one {@code glMultiDrawArraysIndirect} call; the vertex shader builds the quads from the face
+ * buffer.</li>
+ * </ol>
  */
 public final class CloudRenderer {
 
@@ -43,10 +53,14 @@ public final class CloudRenderer {
     private static final int FIELD_SIZE = 2560;
     /** Upper limit for the number of voxel layers, to keep the 3D texture and regeneration cost bounded. */
     private static final int MAX_LAYERS = 128;
-    /** Coarse occupancy cell size in voxels; must match coarse.fsh and volume.fsh. */
-    private static final int COARSE_X = 8;
-    private static final int COARSE_Y = 4;
-    private static final int COARSE_Z = 8;
+    /** Voxel layers regenerated per frame. */
+    private static final int SLAB_LAYERS = 4;
+    /** Chunk size in voxels along X and Z; must be a multiple of 8 (the mesher's workgroup size). */
+    private static final int CHUNK_SIZE = 32;
+    /** Face buffer capacity (8 bytes per face). Faces beyond it are not drawn. */
+    private static final int MAX_FACES = 1 << 24;
+    /** Bytes per chunk record in the chunk buffer and per indirect draw command (4 uints each). */
+    private static final int CHUNK_BYTES = 16;
 
     /** Actual horizontal size in voxels, set at initialisation. */
     private static int sizeX;
@@ -75,19 +89,27 @@ public final class CloudRenderer {
     private static boolean regenQueued;
     /** Number of voxel layers the 3D texture is currently allocated with. */
     private static int allocatedLayers;
+    /** The voxel texture changed since the last meshing. */
+    private static boolean meshDirty;
+    /** Chunk grid size, set at initialisation. */
+    private static int chunksX;
+    private static int chunksZ;
 
     private static boolean initialized;
     private static boolean failed;
 
     private static int voxelTexture;
-    private static int coarseTexture;
     private static int generateProgram;
-    private static int coarseProgram;
-    private static int volumeProgram;
+    private static int meshCountProgram;
+    private static int meshScanProgram;
+    private static int meshEmitProgram;
+    private static int drawProgram;
     private static int emptyVao;
-    private static int cubeVao;
-    private static int cubeVbo;
     private static int generateFbo;
+    /** Faces (uvec2 each), per-chunk records and per-chunk indirect draw commands; see mesh.comp. */
+    private static int faceBuffer;
+    private static int chunkBuffer;
+    private static int drawBuffer;
 
     private static final FloatBuffer MATRIX = GLAllocation.createDirectFloatBuffer(16);
     private static final FloatBuffer PROJECTION = GLAllocation.createDirectFloatBuffer(16);
@@ -196,6 +218,15 @@ public final class CloudRenderer {
         saveLater();
     }
 
+    /**
+     * Far plane distance in blocks needed to see the whole cloud field from anywhere inside it (the field's diagonal).
+     * Used by MixinEntityRenderer. Before initialisation, the requested field size is assumed.
+     */
+    public static float getFarPlane() {
+        int size = initialized ? Math.max(sizeX, sizeZ) : FIELD_SIZE;
+        return (float) (size * VOXEL_SIZE * Math.sqrt(2.0D));
+    }
+
     /** Voxel layers to allocate: the configured field height, limited to 1..MAX_LAYERS. */
     private static int layers() {
         return Math.max(1, Math.min(MAX_LAYERS, Config.fieldHeight));
@@ -210,8 +241,7 @@ public final class CloudRenderer {
                 initialize(mc);
             } catch (RuntimeException e) {
                 failed = true;
-                System.err.println("[Clouded Horizons] GPU cloud initialisation failed, clouds disabled: " + e);
-                e.printStackTrace();
+                CloudedHorizons.LOG.error("GPU cloud initialisation failed, clouds disabled", e);
                 return;
             }
         }
@@ -226,15 +256,23 @@ public final class CloudRenderer {
             startRegen();
         }
         if (regenSlab >= 0) {
-            generateSlabs(mc, regenSlab, 1);
+            generateLayers(mc, regenSlab * SLAB_LAYERS, SLAB_LAYERS);
             regenSlab++;
             if (regenSlab >= slabs()) {
                 regenSlab = regenQueued ? 0 : -1;
                 regenQueued = false;
+                meshDirty = true;
             }
         }
+        if (meshDirty) {
+            meshDirty = false;
+            buildMesh();
+        }
         saveIfDue();
+        draw(world, partialTicks);
+    }
 
+    private static void draw(World world, float partialTicks) {
         GL11.glGetFloatv(GL11.GL_MODELVIEW_MATRIX, MATRIX);
         GL11.glGetFloatv(GL11.GL_PROJECTION_MATRIX, PROJECTION);
 
@@ -244,63 +282,50 @@ public final class CloudRenderer {
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthMask(true);
         GL11.glDisable(GL11.GL_BLEND);
-        // Draw back faces so the box still rasterises when the camera is inside it.
         GL11.glEnable(GL11.GL_CULL_FACE);
-        GL11.glCullFace(GL11.GL_FRONT);
-        // The box can extend past the far plane; clamp instead of clipping it away.
-        GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+        GL11.glCullFace(GL11.GL_BACK);
 
-        GL20.glUseProgram(volumeProgram);
-        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(volumeProgram, "uProj"), false, PROJECTION);
-        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(volumeProgram, "uView"), false, MATRIX);
+        GL20.glUseProgram(drawProgram);
+        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(drawProgram, "uProj"), false, PROJECTION);
+        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(drawProgram, "uView"), false, MATRIX);
         GL20.glUniform3f(
-                GL20.glGetUniformLocation(volumeProgram, "uBoxMin"),
+                GL20.glGetUniformLocation(drawProgram, "uBoxMin"),
                 (float) (originX - RenderManager.renderPosX),
                 (float) (Config.cloudHeight - RenderManager.renderPosY),
                 (float) (originZ - RenderManager.renderPosZ));
+        GL20.glUniform1f(GL20.glGetUniformLocation(drawProgram, "uVS"), VOXEL_SIZE);
         GL20.glUniform3f(
-                GL20.glGetUniformLocation(volumeProgram, "uBoxSize"),
-                sizeX * VOXEL_SIZE,
-                allocatedLayers * VOXEL_SIZE,
-                sizeZ * VOXEL_SIZE);
-        GL20.glUniform3f(GL20.glGetUniformLocation(volumeProgram, "uDims"), sizeX, allocatedLayers, sizeZ);
-        GL20.glUniform1f(GL20.glGetUniformLocation(volumeProgram, "uVS"), VOXEL_SIZE);
-        GL20.glUniform3f(
-                GL20.glGetUniformLocation(volumeProgram, "uColour"),
+                GL20.glGetUniformLocation(drawProgram, "uColour"),
                 (float) colour.xCoord,
                 (float) colour.yCoord,
                 (float) colour.zCoord);
         GL20.glUniform3f(
-                GL20.glGetUniformLocation(volumeProgram, "uSunDir"),
+                GL20.glGetUniformLocation(drawProgram, "uSunDir"),
                 (float) -Math.sin(sunAngle),
                 (float) Math.cos(sunAngle),
                 0.0F);
-        GL20.glUniform1i(GL20.glGetUniformLocation(volumeProgram, "uVoxels"), 0);
-        GL20.glUniform1i(GL20.glGetUniformLocation(volumeProgram, "uCoarse"), 1);
 
-        GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, coarseTexture);
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
-        GL30.glBindVertexArray(cubeVao);
-        GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 36);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, faceBuffer);
+        GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, drawBuffer);
+        GL30.glBindVertexArray(emptyVao);
+        GL43.glMultiDrawArraysIndirect(GL11.GL_TRIANGLES, 0L, chunksX * chunksZ, 0);
         GL30.glBindVertexArray(0);
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
-        GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
         GL20.glUseProgram(0);
 
-        GL11.glDisable(GL32.GL_DEPTH_CLAMP);
-        GL11.glCullFace(GL11.GL_BACK);
         GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private static void initialize(Minecraft mc) {
         initialized = true;
+        if (!GL.getCapabilities().OpenGL43) {
+            throw new IllegalStateException("OpenGL 4.3 is required (compute shaders, storage buffers, indirect draws)");
+        }
         int max3d = GL11.glGetInteger(GL12.GL_MAX_3D_TEXTURE_SIZE);
-        sizeX = Math.min(FIELD_SIZE, max3d);
-        sizeZ = Math.min(FIELD_SIZE, max3d);
+        // Also keep the size a whole number of chunks, so every mesher workgroup lies in one chunk.
+        sizeX = Math.min(FIELD_SIZE, max3d) / CHUNK_SIZE * CHUNK_SIZE;
+        sizeZ = sizeX;
         if (sizeX < FIELD_SIZE) {
             CloudedHorizons.LOG.warn(
                     "GL_MAX_3D_TEXTURE_SIZE is {}; cloud field limited to {} voxels instead of {}",
@@ -310,17 +335,49 @@ public final class CloudRenderer {
         }
         originX = -sizeX * VOXEL_SIZE / 2.0D;
         originZ = -sizeZ * VOXEL_SIZE / 2.0D;
+        chunksX = sizeX / CHUNK_SIZE;
+        chunksZ = sizeZ / CHUNK_SIZE;
 
         generateProgram = createProgram("fullscreen.vsh", "generate.fsh", "noise.fsh");
-        coarseProgram = createProgram("fullscreen.vsh", "coarse.fsh");
-        volumeProgram = createProgram("volume.vsh", "volume.fsh");
+        meshCountProgram = createComputeProgram("mesh.comp", null);
+        meshEmitProgram = createComputeProgram("mesh.comp", "EMIT");
+        meshScanProgram = createComputeProgram("mesh_scan.comp", null);
+        drawProgram = createProgram("mesh.vsh", "mesh.fsh");
         emptyVao = GL30.glGenVertexArrays();
-        createCube();
         voxelTexture = createTexture3D();
-        coarseTexture = createTexture3D();
         allocateTextures();
         generateFbo = GL30.glGenFramebuffers();
+        createMeshBuffers();
         generateAll(mc);
+    }
+
+    private static void createMeshBuffers() {
+        int chunks = chunksX * chunksZ;
+        faceBuffer = createBuffer(GL43.GL_SHADER_STORAGE_BUFFER, (long) MAX_FACES * 8L);
+        // The mesher expects zeroed chunk counters; the scan pass resets them after each use.
+        chunkBuffer = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, chunkBuffer);
+        GL15.glBufferData(
+                GL43.GL_SHADER_STORAGE_BUFFER,
+                GLAllocation.createDirectByteBuffer(chunks * CHUNK_BYTES),
+                GL15.GL_DYNAMIC_DRAW);
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        // Zeroed commands draw nothing until the first meshing.
+        drawBuffer = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, drawBuffer);
+        GL15.glBufferData(
+                GL40.GL_DRAW_INDIRECT_BUFFER,
+                GLAllocation.createDirectByteBuffer(chunks * CHUNK_BYTES),
+                GL15.GL_DYNAMIC_DRAW);
+        GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
+    }
+
+    private static int createBuffer(int target, long bytes) {
+        int buffer = GL15.glGenBuffers();
+        GL15.glBindBuffer(target, buffer);
+        GL15.glBufferData(target, bytes, GL15.GL_DYNAMIC_DRAW);
+        GL15.glBindBuffer(target, 0);
+        return buffer;
     }
 
     /** Starts a regeneration pass, or queues one if a pass is already running. */
@@ -332,17 +389,18 @@ public final class CloudRenderer {
         }
     }
 
-    /** Regenerates the whole volume at once and cancels any running pass. */
+    /** Regenerates the whole volume at once, cancels any running pass, and requests a new mesh. */
     private static void generateAll(Minecraft mc) {
         regenSlab = -1;
         regenQueued = false;
         fieldDirty = false;
-        generateSlabs(mc, 0, slabs());
+        generateLayers(mc, 0, allocatedLayers);
+        meshDirty = true;
     }
 
-    /** Number of slabs, each {@link #COARSE_Y} voxel layers (one coarse layer) thick. */
+    /** Number of slabs of {@link #SLAB_LAYERS} layers. */
     private static int slabs() {
-        return (allocatedLayers + COARSE_Y - 1) / COARSE_Y;
+        return (allocatedLayers + SLAB_LAYERS - 1) / SLAB_LAYERS;
     }
 
     /**
@@ -378,23 +436,17 @@ public final class CloudRenderer {
         return texture;
     }
 
-    /** (Re)allocates the voxel and coarse texture storage for the configured field height. */
+    /** (Re)allocates the voxel texture storage for the configured field height. Layout (x, z, y). */
     private static void allocateTextures() {
         allocatedLayers = layers();
-        // Layout (x, z, y): each generation draw fills one horizontal layer.
-        allocateR8(voxelTexture, sizeX, sizeZ, allocatedLayers);
-        allocateR8(coarseTexture, coarseX(), coarseZ(), slabs());
-    }
-
-    private static void allocateR8(int texture, int width, int height, int depth) {
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture);
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
         GL12.glTexImage3D(
                 GL12.GL_TEXTURE_3D,
                 0,
                 GL30.GL_R8,
-                width,
-                height,
-                depth,
+                sizeX,
+                sizeZ,
+                allocatedLayers,
                 0,
                 GL11.GL_RED,
                 GL11.GL_UNSIGNED_BYTE,
@@ -402,26 +454,14 @@ public final class CloudRenderer {
         GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
     }
 
-    private static int coarseX() {
-        return (sizeX + COARSE_X - 1) / COARSE_X;
-    }
-
-    private static int coarseZ() {
-        return (sizeZ + COARSE_Z - 1) / COARSE_Z;
-    }
-
     /**
-     * Regenerates {@code count} slabs starting at {@code firstSlab}: runs the generation shader once per voxel layer,
-     * then rebuilds the matching coarse layers, then restores Minecraft's GL state.
+     * Regenerates {@code count} voxel layers starting at {@code firstLayer} by running the generation shader once
+     * per layer, then restores Minecraft's GL state.
      */
-    private static void generateSlabs(Minecraft mc, int firstSlab, int count) {
-        int firstLayer = firstSlab * COARSE_Y;
-        int endLayer = Math.min(allocatedLayers, (firstSlab + count) * COARSE_Y);
-        int endSlab = Math.min(slabs(), firstSlab + count);
+    private static void generateLayers(Minecraft mc, int firstLayer, int count) {
+        int endLayer = Math.min(allocatedLayers, firstLayer + count);
 
-        // Nothing may sample the textures being written.
-        GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
+        // Nothing may sample the texture being written.
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, generateFbo);
@@ -468,23 +508,6 @@ public final class CloudRenderer {
             GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
         }
 
-        // Coarse occupancy for the slabs just written.
-        GL20.glUseProgram(coarseProgram);
-        GL20.glUniform1i(GL20.glGetUniformLocation(coarseProgram, "uVoxels"), 0);
-        GL20.glUniform3i(GL20.glGetUniformLocation(coarseProgram, "uDims"), sizeX, allocatedLayers, sizeZ);
-        int coarseLayerLocation = GL20.glGetUniformLocation(coarseProgram, "uLayer");
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
-        GL11.glViewport(0, 0, coarseX(), coarseZ());
-        for (int slab = firstSlab; slab < endSlab; slab++) {
-            GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, coarseTexture, 0, slab);
-            if (slab == firstSlab) {
-                checkFramebuffer("Coarse");
-            }
-            GL20.glUniform1i(coarseLayerLocation, slab);
-            GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
-        }
-        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
-
         GL30.glBindVertexArray(0);
         GL20.glUseProgram(0);
 
@@ -498,6 +521,48 @@ public final class CloudRenderer {
         GL11.glEnable(GL11.GL_CULL_FACE);
     }
 
+    /** Rebuilds the face buffer and the per-chunk draw commands from the voxel texture (see mesh.comp). */
+    private static void buildMesh() {
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, faceBuffer);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, chunkBuffer);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, drawBuffer);
+        int groupsX = sizeX / 8;
+        int groupsZ = sizeZ / 8;
+        int groupsY = (allocatedLayers + 3) / 4;
+
+        setMeshUniforms(meshCountProgram);
+        GL43.glDispatchCompute(groupsX, groupsZ, groupsY);
+        GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+
+        GL20.glUseProgram(meshScanProgram);
+        GL30.glUniform1ui(GL20.glGetUniformLocation(meshScanProgram, "uChunkCount"), chunksX * chunksZ);
+        GL30.glUniform1ui(GL20.glGetUniformLocation(meshScanProgram, "uCapacity"), MAX_FACES);
+        GL43.glDispatchCompute(1, 1, 1);
+        GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+
+        setMeshUniforms(meshEmitProgram);
+        GL43.glDispatchCompute(groupsX, groupsZ, groupsY);
+        // The faces are read by the vertex shader, the draw commands by the indirect draw.
+        GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_COMMAND_BARRIER_BIT);
+
+        for (int binding = 0; binding < 3; binding++) {
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, binding, 0);
+        }
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
+        GL20.glUseProgram(0);
+    }
+
+    private static void setMeshUniforms(int program) {
+        GL20.glUseProgram(program);
+        GL20.glUniform1i(GL20.glGetUniformLocation(program, "uVoxels"), 0);
+        GL20.glUniform3i(GL20.glGetUniformLocation(program, "uDims"), sizeX, allocatedLayers, sizeZ);
+        GL20.glUniform1i(GL20.glGetUniformLocation(program, "uChunkSize"), CHUNK_SIZE);
+        GL20.glUniform1i(GL20.glGetUniformLocation(program, "uChunksX"), chunksX);
+        GL30.glUniform1ui(GL20.glGetUniformLocation(program, "uCapacity"), MAX_FACES);
+    }
+
     private static void checkFramebuffer(String name) {
         int status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);
         if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
@@ -505,33 +570,17 @@ public final class CloudRenderer {
         }
     }
 
-    /** Unit cube as 12 triangles, counter-clockwise when seen from outside. */
-    private static void createCube() {
-        float[][] quads = {
-                { 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0 }, // +Y
-                { 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1 }, // -Y
-                { 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1 }, // +X
-                { 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0 }, // -X
-                { 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1 }, // +Z
-                { 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0 }, // -Z
-        };
-        FloatBuffer data = GLAllocation.createDirectFloatBuffer(36 * 3);
-        for (float[] q : quads) {
-            for (int corner : new int[] { 0, 1, 2, 0, 2, 3 }) {
-                data.put(q, corner * 3, 3);
-            }
+    /** Compiles and links a compute program; {@code define}, if not null, is #defined before the source. */
+    private static int createComputeProgram(String name, String define) {
+        int shader = compileShader(GL43.GL_COMPUTE_SHADER, name, define);
+        int program = GL20.glCreateProgram();
+        GL20.glAttachShader(program, shader);
+        GL20.glLinkProgram(program);
+        GL20.glDeleteShader(shader);
+        if (GL20.glGetProgrami(program, GL20.GL_LINK_STATUS) == GL11.GL_FALSE) {
+            throw new IllegalStateException("Link failed (" + name + "): " + GL20.glGetProgramInfoLog(program, 8192));
         }
-        data.flip();
-
-        cubeVao = GL30.glGenVertexArrays();
-        GL30.glBindVertexArray(cubeVao);
-        cubeVbo = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, cubeVbo);
-        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, data, GL15.GL_STATIC_DRAW);
-        GL20.glEnableVertexAttribArray(0);
-        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 12, 0L);
-        GL30.glBindVertexArray(0);
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        return program;
     }
 
     /**
@@ -541,9 +590,9 @@ public final class CloudRenderer {
     private static int createProgram(String vertexName, String... fragmentNames) {
         int program = GL20.glCreateProgram();
         int[] shaders = new int[fragmentNames.length + 1];
-        shaders[0] = compileShader(GL20.GL_VERTEX_SHADER, vertexName);
+        shaders[0] = compileShader(GL20.GL_VERTEX_SHADER, vertexName, null);
         for (int i = 0; i < fragmentNames.length; i++) {
-            shaders[i + 1] = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentNames[i]);
+            shaders[i + 1] = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentNames[i], null);
         }
         for (int shader : shaders) {
             GL20.glAttachShader(program, shader);
@@ -560,9 +609,15 @@ public final class CloudRenderer {
         return program;
     }
 
-    private static int compileShader(int type, String name) {
+    private static int compileShader(int type, String name, String define) {
+        String source = readShader(name);
+        if (define != null) {
+            // #define must follow the #version line.
+            int eol = source.indexOf('\n') + 1;
+            source = source.substring(0, eol) + "#define " + define + "\n" + source.substring(eol);
+        }
         int shader = GL20.glCreateShader(type);
-        GL20.glShaderSource(shader, readShader(name));
+        GL20.glShaderSource(shader, source);
         GL20.glCompileShader(shader);
         if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == GL11.GL_FALSE) {
             throw new IllegalStateException("Compile failed (" + name + "): " + GL20.glGetShaderInfoLog(shader, 8192));

@@ -30,16 +30,27 @@ Rendering code and mixins must be compatible with that environment.
 - The current configuration contains a general `enabled` option.
 - Mixin support is enabled in `gradle.properties`.
 - The configured mixin package is `com.cloudedhorizons.mixin`.
-- Cloud replacement (GPU; the large-field version has not been built yet):
+- Cloud replacement (GPU, needs OpenGL 4.3; the mesher version has not been built yet):
   `MixinRenderGlobal` cancels `RenderGlobal.renderClouds` at the HEAD in surface worlds when `Config.enabled` is on,
   and calls `client.CloudRenderer`. The field is `FIELD_SIZE` 2560 x fieldHeight x 2560 voxels of 8 blocks, centred
-  on X/Z 0 and limited by `GL_MAX_3D_TEXTURE_SIZE` (a warning is logged). `generate.fsh` + `noise.fsh` write one layer
-  per draw into an R8 3D texture laid out x,z,y. `coarse.fsh` builds a coarse occupancy texture (one texel per 8x4x8
-  voxels: 1 if any voxel is solid), which `volume.fsh` uses to skip empty cells during its DDA (max 2048 steps).
-  Regeneration is spread over frames: one slab (4 layers plus its coarse layer) per frame, with a new pass at most
-  every 2 ticks while morphing. Field changes queue a pass, and a height change reallocates and regenerates
-  everything at once. The volume's bounding box is drawn with back faces and depth clamp; `volume.fsh` writes
-  `gl_FragDepth`. The shaders are in `assets/cloudedhorizons/shaders`, written in GLSL 330 core.
+  on X/Z 0 and limited by `GL_MAX_3D_TEXTURE_SIZE` (rounded down to whole 32-voxel chunks).
+  1. Generation: `generate.fsh` + `noise.fsh` write one layer per draw into an R8 3D texture laid out x,z,y. This is
+     spread over frames (4 layers per frame), with a new pass at most every 2 ticks while morphing. Field changes queue
+     a pass, and a height change reallocates and regenerates everything at once.
+  2. Meshing (replaced the raymarcher on 2026-09-26, so LODs can be added later): after each complete pass,
+     `mesh.comp` (compiled twice: count, and `EMIT`) and `mesh_scan.comp` build one face per solid voxel side next to
+     empty space. There is no greedy merging yet. Faces are grouped per chunk of 32x32 voxel columns, and each chunk
+     has a range in the face buffer (capacity `MAX_FACES` 2^24 at 8 bytes = 128 MB; overflowing faces are dropped) and
+     its own indirect draw command. The count pass does atomics per chunk (a workgroup of 8x8x4 lies in one chunk),
+     the scan (one workgroup of 1024) does a prefix sum, writes the draw commands and resets the counters, and the
+     emit pass writes the faces. Face = uvec2(x | z<<12 | y<<24, dir).
+  3. Drawing: `mesh.vsh` (vertex pulling from the SSBO via gl_VertexID, 6 vertices per face) + `mesh.fsh` (flat face
+     shading), one `glMultiDrawArraysIndirect` over all chunks, back-face culling. `MixinEntityRenderer` raises the
+     far plane of the world projection (the `gluPerspective` call in `setupCameraTransform`, argument only; `farPlaneDistance`
+     and fog stay as they are) to `CloudRenderer.getFarPlane()` (the field diagonal, about 29000 blocks). Before this,
+     depth clamp was used, and all faces beyond the far plane got the same depth: a visible line and wrong faces. A
+     separate cloud framebuffer with logarithmic depth was considered as the fallback if far clouds z-fight.
+  The shaders are in `assets/cloudedhorizons/shaders`: GLSL 330, and 430 for compute and `mesh.vsh`.
 - The mod compiles against the LWJGL3 API through lwjgl3ify, so use LWJGL3 method names (`glGetFloatv`,
   `glUniformMatrix4fv`).
 - The clouds morph in place: `CloudRenderer` advances a noise time phase by game time multiplied by `morphSpeed`
