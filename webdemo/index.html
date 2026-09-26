@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clouded Horizons Voxel Clouds</title>
+<style>
+  :root { --panel: rgba(18, 22, 30, 0.86); --text: #dfe6f0; --muted: #8d99aa; --accent: #7fb2ff; }
+  html, body { margin: 0; height: 100%; background: #10141b; color: var(--text); font: 12px/1.35 system-ui, sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; image-rendering: pixelated; }
+  #panel { position: fixed; top: 8px; left: 8px; bottom: 8px; width: 290px; overflow-y: auto; background: var(--panel);
+           border-radius: 8px; padding: 8px 10px; box-sizing: border-box; }
+  #panel.hidden { display: none; }
+  h1 { font-size: 14px; margin: 2px 0 6px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin: 12px 0 4px; }
+  .row { display: grid; grid-template-columns: 108px 1fr 48px; gap: 6px; align-items: center; margin: 2px 0; }
+  .row label { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row input[type=range] { width: 100%; }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; }
+  .check { display: flex; gap: 6px; align-items: center; margin: 3px 0; color: var(--muted); }
+  .buttons { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+  button { background: #2a3342; color: var(--text); border: 1px solid #3b475b; border-radius: 4px; padding: 3px 7px; font: inherit; cursor: pointer; }
+  button:hover { background: #354157; }
+  #stats { position: fixed; top: 8px; right: 8px; background: var(--panel); border-radius: 8px; padding: 6px 10px;
+           font-variant-numeric: tabular-nums; white-space: pre; pointer-events: none; }
+  #help { color: var(--muted); margin-top: 10px; }
+  #error { position: fixed; inset: 0; display: none; place-items: center; background: #10141b; color: #ff9d9d; white-space: pre-wrap; padding: 24px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel">
+  <h1>Voxel Cloud Field</h1>
+  <div class="buttons" id="presets"></div>
+  <div id="controls"></div>
+  <div class="buttons">
+    <button id="pause">Pause</button>
+    <button id="regen">Regenerate now</button>
+    <button id="topview">Top view</button>
+  </div>
+  <div id="help">
+    Drag: look · WASD: move · Space / C: up / down<br>
+    Shift: fast · Wheel: fly speed · H: hide panel<br>
+    Minimap (bottom right): field value, white = cloud columns, red = camera.
+  </div>
+</div>
+<div id="stats"></div>
+<div id="error"></div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------------------------------------------------
+
+// [group, key, label, min, max, step, default, regenerateKind]
+// regenerateKind: 'alloc' = grid size changes, 'field' = voxels must be rebuilt, null = render-only.
+const PARAM_SPEC = [
+  ['Grid', 'worldSize', 'World size (blocks)', 2000, 20000, 500, 10000, 'alloc'],
+  ['Grid', 'voxelSize', 'Voxel size (blocks)', 1, 32, 1, 8, 'alloc'],
+  ['Grid', 'cloudBase', 'Cloud base (Y)', 96, 320, 1, 192, null],
+  ['Grid', 'thickness', 'Layer thickness', 16, 384, 8, 128, 'alloc'],
+
+  ['Field: columns', 'seed', 'Seed', 0, 999, 1, 1, 'field'],
+  ['Field: columns', 'coverage', 'Coverage', 0, 1, 0.005, 0.42, 'field'],
+  ['Field: columns', 'mapScale', 'Feature size', 50, 3000, 10, 520, 'field'],
+  ['Field: columns', 'octaves', 'Octaves', 1, 8, 1, 5, 'field'],
+  ['Field: columns', 'gain', 'Roughness', 0.2, 0.8, 0.01, 0.5, 'field'],
+  ['Field: columns', 'contrast', 'Contrast', 0.3, 3, 0.01, 1.3, 'field'],
+  ['Field: columns', 'warpScale', 'Warp size', 50, 4000, 10, 900, 'field'],
+  ['Field: columns', 'warpStrength', 'Warp strength', 0, 1500, 10, 250, 'field'],
+  ['Field: columns', 'regionScale', 'Weather size', 500, 20000, 100, 4500, 'field'],
+  ['Field: columns', 'regionStrength', 'Weather strength', 0, 1, 0.01, 0.35, 'field'],
+
+  ['Field: vertical', 'tower', 'Towering', 0, 12, 0.05, 3.0, 'field'],
+  ['Field: vertical', 'roundness', 'Top roundness', 0.2, 4, 0.01, 1.2, 'field'],
+  ['Field: vertical', 'baseFlat', 'Base flatness', 0, 1, 0.01, 0.6, 'field'],
+  ['Field: vertical', 'detailScale', 'Detail size', 8, 600, 1, 90, 'field'],
+  ['Field: vertical', 'detailStrength', 'Detail strength', 0, 1, 0.01, 0.22, 'field'],
+  ['Field: vertical', 'detailOctaves', 'Detail octaves', 0, 4, 1, 2, 'field'],
+
+  ['Motion', 'windX', 'Wind X (b/s)', -60, 60, 0.5, 6, 'field'],
+  ['Motion', 'windZ', 'Wind Z (b/s)', -60, 60, 0.5, 2, 'field'],
+  ['Motion', 'evolve', 'Morph speed', 0, 0.2, 0.001, 0.02, 'field'],
+  ['Motion', 'timeScale', 'Time scale', 0, 50, 0.1, 1, null],
+  ['Motion', 'regenInterval', 'Rebuild every (ms)', 0, 2000, 10, 120, null],
+
+  ['Render', 'sunAzimuth', 'Sun azimuth', 0, 360, 1, 35, null],
+  ['Render', 'sunElevation', 'Sun elevation', 2, 90, 1, 40, null],
+  ['Render', 'fog', 'Fog distance', 500, 30000, 100, 7000, null],
+  ['Render', 'fov', 'FOV', 30, 110, 1, 70, null],
+  ['Render', 'resScale', 'Resolution scale', 0.25, 1, 0.05, 0.75, null],
+  ['Render', 'shadowSteps', 'Shadow steps', 0, 256, 8, 96, null],
+  ['Render', 'maxSteps', 'Primary steps', 64, 2048, 32, 768, null],
+];
+
+const TOGGLES = [
+  ['ao', 'Voxel ambient occlusion', true],
+  ['showCoarse', 'Show coarse occupancy cells', false],
+  ['groundGrid', 'Chunk grid on ground', true],
+  ['minimap', 'Minimap', true],
+];
+
+const PRESETS = {
+  'Fair cumulus': { coverage: 0.42, mapScale: 520, tower: 3.0, roundness: 1.2, detailStrength: 0.22, regionStrength: 0.35, thickness: 128, contrast: 1.3 },
+  'Towering': { coverage: 0.38, mapScale: 900, tower: 7.0, roundness: 0.7, detailStrength: 0.28, regionStrength: 0.5, thickness: 320, contrast: 1.6 },
+  'Scattered small': { coverage: 0.3, mapScale: 160, tower: 2.0, roundness: 1.5, detailStrength: 0.15, regionStrength: 0.2, thickness: 64, contrast: 1.5 },
+  'Overcast': { coverage: 0.75, mapScale: 1200, tower: 1.0, roundness: 2.5, detailStrength: 0.12, regionStrength: 0.3, thickness: 96, contrast: 1.0 },
+  'Vanilla-ish flat': { coverage: 0.45, mapScale: 200, tower: 12, roundness: 0.2, detailStrength: 0, regionStrength: 0, thickness: 16, voxelSize: 12, contrast: 3 },
+};
+
+const P = {};
+for (const s of PARAM_SPEC) P[s[1]] = s[6];
+for (const t of TOGGLES) P[t[0]] = t[2];
+
+// Coarse occupancy cell size in voxels (x, y, z). Must match COARSE in the shaders.
+const COARSE = [8, 4, 8];
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Shaders
+// ---------------------------------------------------------------------------------------------------------------------
+
+const VS_FULLSCREEN = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const GLSL_NOISE = `
+uniform uint uSeed;
+
+uvec3 pcg3d(uvec3 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return v;
+}
+
+vec3 grad3(ivec3 p) {
+  uvec3 h = pcg3d(uvec3(p) + uvec3(uSeed * 7919u, uSeed * 104729u, uSeed * 15485863u));
+  return vec3(h & 0xffffu) * (2.0 / 65535.0) - 1.0;
+}
+
+// Gradient noise in roughly [-1, 1].
+float gnoise(vec3 x) {
+  vec3 fl = floor(x);
+  ivec3 i = ivec3(fl);
+  vec3 f = x - fl;
+  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  float n000 = dot(grad3(i + ivec3(0,0,0)), f - vec3(0,0,0));
+  float n100 = dot(grad3(i + ivec3(1,0,0)), f - vec3(1,0,0));
+  float n010 = dot(grad3(i + ivec3(0,1,0)), f - vec3(0,1,0));
+  float n110 = dot(grad3(i + ivec3(1,1,0)), f - vec3(1,1,0));
+  float n001 = dot(grad3(i + ivec3(0,0,1)), f - vec3(0,0,1));
+  float n101 = dot(grad3(i + ivec3(1,0,1)), f - vec3(1,0,1));
+  float n011 = dot(grad3(i + ivec3(0,1,1)), f - vec3(0,1,1));
+  float n111 = dot(grad3(i + ivec3(1,1,1)), f - vec3(1,1,1));
+  return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+             mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 1.4;
+}
+
+// Normalised fractal sum; each octave is shifted to avoid aligned lattice artefacts.
+float fbm(vec3 p, int octaves, float gain) {
+  float sum = 0.0, amp = 1.0, norm = 0.0;
+  for (int i = 0; i < 8; i++) {
+    if (i >= octaves) break;
+    sum += amp * gnoise(p);
+    norm += amp;
+    amp *= gain;
+    p = p * 2.03 + vec3(17.13, -9.71, 5.37);
+  }
+  return norm > 0.0 ? sum / norm : 0.0;
+}
+`;
+
+// Pass 1: 2D column field. One texel per voxel column (x, z).
+// r = column strength (> 0 means the column can hold cloud), g = raw noise, b = weather modulation.
+const FS_COLUMN = `#version 300 es
+precision highp float;
+precision highp int;
+${GLSL_NOISE}
+uniform float uVS, uT, uEvolve, uMapScale, uGain, uContrast, uWarpScale, uWarpStrength;
+uniform float uRegionScale, uRegionStrength, uCoverage;
+uniform int uOctaves;
+uniform vec2 uWind;
+out vec4 outColor;
+void main() {
+  vec2 xz = (floor(gl_FragCoord.xy) + 0.5) * uVS;
+  vec2 q = xz - uWind * uT;
+  float ev = uT * uEvolve;
+
+  vec2 warp = vec2(fbm(vec3(q / uWarpScale, ev * 0.7 + 11.3), 3, 0.5),
+                   fbm(vec3(q / uWarpScale + 37.1, ev * 0.7 - 5.2), 3, 0.5)) * uWarpStrength;
+  float m = fbm(vec3((q + warp) / uMapScale, ev), uOctaves, uGain) * 0.5 * uContrast + 0.5;
+  float region = fbm(vec3(q / uRegionScale + 91.7, ev * 0.3 + 3.1), 3, 0.5);
+  float cov = m + region * uRegionStrength - (1.0 - uCoverage);
+  outColor = vec4(cov, m, region, 1.0);
+}`;
+
+// Pass 2: 3D voxel field, one draw per horizontal layer (y). Writes 1 for solid, 0 for empty.
+const FS_VOXEL = `#version 300 es
+precision highp float;
+precision highp int;
+${GLSL_NOISE}
+uniform highp sampler2D uColumn;
+uniform int uLayer, uDetailOctaves;
+uniform float uVS, uT, uEvolve, uThickness, uTower, uRoundness, uBaseFlat, uDetailScale, uDetailStrength;
+uniform vec2 uWind;
+out vec4 outColor;
+void main() {
+  ivec2 cell = ivec2(gl_FragCoord.xy);
+  float cov = texelFetch(uColumn, cell, 0).r;
+  // Cheap reject: detail can add at most uDetailStrength.
+  if (cov + uDetailStrength <= 0.0) { outColor = vec4(0.0); return; }
+
+  float y = (float(uLayer) + 0.5) * uVS;
+  float h = clamp(y / uThickness, 0.0, 1.0);
+  float colH = clamp(cov * uTower, 0.0, 1.0);
+
+  // Height profile: column top at h = colH^(1/roundness). The base is flat when detail is suppressed near h = 0.
+  float d = colH - pow(h, uRoundness);
+
+  if (uDetailOctaves > 0 && uDetailStrength > 0.0) {
+    vec3 p = vec3((vec2(cell) + 0.5) * uVS, y);
+    vec3 q = vec3(p.x - uWind.x * uT, p.z, p.y - uWind.y * uT) / uDetailScale;
+    float detail = fbm(q + vec3(0.0, 0.0, uT * uEvolve * 3.0), uDetailOctaves, 0.5);
+    float baseMask = mix(1.0, smoothstep(0.0, 0.25, h), uBaseFlat);
+    // Bottom stays flat: below the base mask detail can only erode, not add.
+    d += detail * uDetailStrength * (detail > 0.0 ? baseMask : 1.0);
+  }
+  outColor = vec4(d > 0.0 ? 1.0 : 0.0);
+}`;
+
+// Pass 3: coarse occupancy (max over a COARSE block of voxels) for empty-space skipping.
+const FS_COARSE = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler3D;
+uniform sampler3D uFine;
+uniform int uLayer;
+uniform ivec3 uDims; // nx, ny, nz
+out vec4 outColor;
+const ivec3 COARSE = ivec3(${COARSE.join(',')});
+void main() {
+  ivec3 base = ivec3(ivec2(gl_FragCoord.xy), uLayer) * COARSE.xzy; // (x, z, y) layout
+  float occ = 0.0;
+  for (int y = 0; y < COARSE.y; y++)
+  for (int z = 0; z < COARSE.z; z++)
+  for (int x = 0; x < COARSE.x; x++) {
+    ivec3 c = base + ivec3(x, z, y);
+    if (c.x < uDims.x && c.y < uDims.z && c.z < uDims.y) occ = max(occ, texelFetch(uFine, c, 0).r);
+  }
+  outColor = vec4(occ);
+}`;
+
+// Main render: DDA through the voxel grid with coarse-cell skipping.
+const FS_RENDER = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler3D;
+uniform sampler3D uFine, uCoarse;
+uniform vec3 uDims;      // voxel grid dims (x, y, z)
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uRes;
+uniform float uTanHalfFov, uVS, uBase, uGround, uFog, uWorld;
+uniform vec3 uSunDir;
+uniform int uMaxSteps, uShadowSteps;
+uniform bool uAO, uShowCoarse, uGroundGrid;
+out vec4 outColor;
+
+const vec3 COARSE = vec3(${COARSE.join('.0,')}.0);
+
+float fineAt(ivec3 c) {
+  if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(uDims)))) return 0.0;
+  return texelFetch(uFine, c.xzy, 0).r;
+}
+float coarseAt(ivec3 c) { return texelFetch(uCoarse, c.xzy, 0).r; }
+
+// Ray in voxel space. Returns true on hit; tHit in voxel units, nrm = face normal of the hit face.
+bool trace(vec3 ro, vec3 rd, float tLimit, int maxSteps, out float tHit, out vec3 nrm, out int steps) {
+  rd = mix(rd, sign(rd) * 1e-6 + vec3(equal(rd, vec3(0.0))) * 1e-6, vec3(lessThan(abs(rd), vec3(1e-6))));
+  vec3 inv = 1.0 / rd;
+  vec3 t1 = -ro * inv, t2 = (uDims - ro) * inv;
+  vec3 tmn = min(t1, t2), tmx = max(t1, t2);
+  float tn = max(max(tmn.x, tmn.y), tmn.z);
+  float tf = min(min(min(tmx.x, tmx.y), tmx.z), tLimit);
+  steps = 0;
+  nrm = vec3(0.0);
+  tHit = 0.0;
+  if (tf < max(tn, 0.0)) return false;
+  if (tn > 0.0) nrm = tn == tmn.x ? vec3(-sign(rd.x), 0, 0) : tn == tmn.y ? vec3(0, -sign(rd.y), 0) : vec3(0, 0, -sign(rd.z));
+  float t = max(tn, 0.0) + 1e-3;
+  vec3 sg = step(0.0, rd);
+  ivec3 hiCell = ivec3(uDims) - 1;
+  for (int i = 0; i < 4096; i++) {
+    if (i >= maxSteps || t > tf) return false;
+    steps = i;
+    ivec3 c = clamp(ivec3(floor(ro + rd * t)), ivec3(0), hiCell);
+    ivec3 cc = c / ivec3(COARSE);
+    vec3 lo, hi;
+    if (coarseAt(cc) < 0.5) {
+      lo = vec3(cc) * COARSE; hi = lo + COARSE;
+    } else {
+      if (texelFetch(uFine, c.xzy, 0).r > 0.5) { tHit = t; return true; }
+      lo = vec3(c); hi = lo + 1.0;
+    }
+    vec3 tb = (mix(lo, hi, sg) - ro) * inv;
+    float te = min(min(tb.x, tb.y), tb.z);
+    nrm = te == tb.x ? vec3(-sign(rd.x), 0, 0) : te == tb.y ? vec3(0, -sign(rd.y), 0) : vec3(0, 0, -sign(rd.z));
+    t = te + 1e-3;
+  }
+  return false;
+}
+
+// Coarse-only trace, for visualising the skip structure.
+bool traceCoarse(vec3 ro, vec3 rd, float tLimit, out float tHit) {
+  vec3 cro = ro / COARSE;
+  vec3 cd = ceil(uDims / COARSE);
+  rd = mix(rd, vec3(1e-6), vec3(lessThan(abs(rd), vec3(1e-6))));
+  vec3 inv = 1.0 / rd;
+  vec3 t1 = -cro * inv, t2 = (cd - cro) * inv;
+  vec3 tmn = min(t1, t2), tmx = max(t1, t2);
+  float tn = max(max(tmn.x, tmn.y), tmn.z), tf = min(min(tmx.x, tmx.y), tmx.z);
+  if (tf < max(tn, 0.0)) return false;
+  float t = max(tn, 0.0) + 1e-3;
+  vec3 sg = step(0.0, rd);
+  for (int i = 0; i < 1024; i++) {
+    if (t > tf) return false;
+    ivec3 c = clamp(ivec3(floor(cro + rd * t)), ivec3(0), ivec3(cd) - 1);
+    if (coarseAt(c) > 0.5) { tHit = t; return true; }
+    vec3 tb = (mix(vec3(c), vec3(c) + 1.0, sg) - cro) * inv;
+    t = min(min(tb.x, tb.y), tb.z) + 1e-3;
+  }
+  return false;
+}
+
+vec3 sky(vec3 rd) {
+  float h = max(rd.y, 0.0);
+  vec3 col = mix(vec3(0.72, 0.82, 0.93), vec3(0.28, 0.48, 0.82), pow(h, 0.6));
+  float s = max(dot(rd, uSunDir), 0.0);
+  col += vec3(1.0, 0.85, 0.6) * (pow(s, 600.0) * 4.0 + pow(s, 12.0) * 0.18);
+  return col;
+}
+
+float voxelAO(ivec3 cell, vec3 nrm, vec3 p) {
+  ivec3 n = ivec3(nrm);
+  ivec3 u = abs(n.x) > 0 ? ivec3(0, 1, 0) : ivec3(1, 0, 0);
+  ivec3 v = abs(n.z) > 0 ? ivec3(0, 1, 0) : ivec3(0, 0, 1);
+  vec3 fp = fract(p);
+  vec2 f = vec2(dot(fp, vec3(u)), dot(fp, vec3(v)));
+  ivec3 b = cell + n;
+  float su0 = fineAt(b - u), su1 = fineAt(b + u), sv0 = fineAt(b - v), sv1 = fineAt(b + v);
+  float c00 = fineAt(b - u - v), c10 = fineAt(b + u - v), c01 = fineAt(b - u + v), c11 = fineAt(b + u + v);
+  float occ = su0 * (1.0 - f.x) + su1 * f.x + sv0 * (1.0 - f.y) + sv1 * f.y;
+  occ += c00 * (1.0 - f.x) * (1.0 - f.y) + c10 * f.x * (1.0 - f.y) + c01 * (1.0 - f.x) * f.y + c11 * f.x * f.y;
+  return 1.0 - 0.22 * occ;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy / uRes) * 2.0 - 1.0;
+  vec3 rd = normalize(uCamFwd + uv.x * uTanHalfFov * (uRes.x / uRes.y) * uCamRight + uv.y * uTanHalfFov * uCamUp);
+  vec3 origin = vec3(0.0, uBase, 0.0);
+  vec3 roV = (uCamPos - origin) / uVS;
+
+  float tGround = rd.y < 0.0 ? (uGround - uCamPos.y) / rd.y : 1e9;
+  if (uCamPos.y < uGround) tGround = 1e9;
+  vec3 col = sky(rd);
+  float dist = 1e9;
+
+  float tHit; vec3 nrm; int steps;
+  if (uShowCoarse) {
+    float tc;
+    if (traceCoarse(roV, rd, tGround / uVS / COARSE.x, tc)) {
+      col = vec3(0.9, 0.6, 0.3);
+      dist = 1e9;
+      col *= 0.6 + 0.4 * fract(tc * 0.05);
+    }
+  }
+  if (trace(roV, rd, tGround / uVS, uMaxSteps, tHit, nrm, steps)) {
+    vec3 pV = roV + rd * tHit;
+    ivec3 cell = ivec3(floor(pV - nrm * 0.5));
+    float hFrac = (float(cell.y) + 0.5) / uDims.y;
+    float diff = max(dot(nrm, uSunDir), 0.0);
+    float shadow = 1.0;
+    if (uShadowSteps > 0 && diff > 0.0) {
+      float ts; vec3 ns; int ss;
+      if (trace(pV + nrm * 0.01, uSunDir, 1e9, uShadowSteps, ts, ns, ss)) shadow = 0.0;
+    }
+    float ao = uAO ? voxelAO(cell, nrm, pV) : 1.0;
+    vec3 albedo = mix(vec3(0.80, 0.82, 0.86), vec3(1.0), smoothstep(0.0, 0.6, hFrac));
+    vec3 ambient = mix(vec3(0.45, 0.50, 0.60), vec3(0.72, 0.80, 0.92), nrm.y * 0.5 + 0.5);
+    col = albedo * (ambient * ao + vec3(1.0, 0.95, 0.85) * diff * shadow * 0.55);
+    dist = tHit * uVS;
+  } else if (tGround < 1e8) {
+    vec3 gp = uCamPos + rd * tGround;
+    bool inside = gp.x >= 0.0 && gp.z >= 0.0 && gp.x <= uWorld && gp.z <= uWorld;
+    vec3 g = inside ? vec3(0.36, 0.52, 0.28) : vec3(0.30, 0.36, 0.30);
+    if (uGroundGrid) {
+      vec2 cf = abs(fract(gp.xz / 16.0 + 0.5) - 0.5) * 16.0;
+      float w = max(tGround * 0.0015, 0.08);
+      float line = 1.0 - smoothstep(0.0, w, min(cf.x, cf.y));
+      g *= 1.0 - 0.25 * line * (1.0 - smoothstep(300.0, 1500.0, tGround));
+      vec2 rf = abs(fract(gp.xz / 512.0 + 0.5) - 0.5) * 512.0;
+      float rl = 1.0 - smoothstep(0.0, max(tGround * 0.002, 0.5), min(rf.x, rf.y));
+      g = mix(g, vec3(0.8, 0.7, 0.3), rl * 0.5);
+    }
+    float shadow = 1.0;
+    if (uShadowSteps > 0) {
+      float ts; vec3 ns; int ss;
+      if (trace((gp - origin) / uVS, uSunDir, 1e9, uShadowSteps, ts, ns, ss)) shadow = 0.45;
+    }
+    col = g * (0.45 + 0.55 * max(uSunDir.y, 0.0) * shadow);
+    dist = tGround;
+  }
+  if (dist < 1e8) col = mix(col, sky(normalize(vec3(rd.x, 0.02, rd.z))), 1.0 - exp(-dist / uFog));
+  outColor = vec4(pow(col, vec3(1.0 / 1.1)), 1.0);
+}`;
+
+// Minimap: shows the column field.
+const FS_MINIMAP = `#version 300 es
+precision highp float;
+uniform highp sampler2D uColumn;
+uniform vec4 uRect; // x, y, w, h in pixels
+uniform vec2 uCamXZ;
+uniform vec2 uCamDir;
+uniform float uWorld, uTower;
+out vec4 outColor;
+void main() {
+  vec2 uv = (gl_FragCoord.xy - uRect.xy) / uRect.zw;
+  vec4 f = texture(uColumn, uv);
+  float cov = f.r;
+  vec3 col = cov > 0.0 ? mix(vec3(0.75), vec3(1.0), clamp(cov * uTower, 0.0, 1.0))
+                       : mix(vec3(0.05, 0.10, 0.22), vec3(0.25, 0.40, 0.65), clamp(f.g, 0.0, 1.0));
+  vec2 camUv = uCamXZ / uWorld;
+  vec2 dpx = (uv - camUv) * uRect.zw;
+  float r = length(dpx);
+  if (r < 3.5) col = vec3(1.0, 0.2, 0.2);
+  else if (r < 16.0 && dot(normalize(dpx), normalize(uCamDir)) > 0.96) col = vec3(1.0, 0.55, 0.2);
+  vec2 e = min(uv, 1.0 - uv) * uRect.zw;
+  if (min(e.x, e.y) < 1.5) col = vec3(0.6);
+  outColor = vec4(col, 1.0);
+}`;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// GL setup
+// ---------------------------------------------------------------------------------------------------------------------
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, depth: false, powerPreference: 'high-performance' });
+
+function fail(msg) {
+  const e = document.getElementById('error');
+  e.style.display = 'grid';
+  e.textContent = msg;
+  throw new Error(msg);
+}
+
+if (!gl) fail('WebGL2 is not available.');
+if (!gl.getExtension('EXT_color_buffer_float')) fail('EXT_color_buffer_float is required for the column field pass.');
+const MAX_3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
+const MAX_2D = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const numbered = src.split('\n').map((l, i) => `${String(i + 1).padStart(4)} ${l}`).join('\n');
+    fail('Shader compile error:\n' + gl.getShaderInfoLog(s) + '\n' + numbered);
+  }
+  return s;
+}
+
+function program(fsSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VS_FULLSCREEN));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) fail('Program link error:\n' + gl.getProgramInfoLog(p));
+  const locs = new Map();
+  p.u = (name) => {
+    if (!locs.has(name)) locs.set(name, gl.getUniformLocation(p, name));
+    return locs.get(name);
+  };
+  return p;
+}
+
+const progColumn = program(FS_COLUMN);
+const progVoxel = program(FS_VOXEL);
+const progCoarse = program(FS_COARSE);
+const progRender = program(FS_RENDER);
+const progMinimap = program(FS_MINIMAP);
+
+gl.bindVertexArray(gl.createVertexArray());
+const fbo = gl.createFramebuffer();
+
+function makeTex(target, internalFormat, w, h, d) {
+  const t = gl.createTexture();
+  gl.bindTexture(target, t);
+  if (target === gl.TEXTURE_3D) gl.texStorage3D(target, 1, internalFormat, w, h, d);
+  else gl.texStorage2D(target, 1, internalFormat, w, h);
+  gl.texParameteri(target, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(target, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(target, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Voxel grid
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Textures are laid out (x, z, y) so that each generation draw writes one horizontal layer.
+const grid = { nx: 0, ny: 0, nz: 0, cx: 0, cy: 0, cz: 0, vs: 0, column: null, fine: null, coarse: null };
+
+function minVoxelSize() {
+  return Math.ceil(P.worldSize / Math.min(MAX_3D, MAX_2D));
+}
+
+function allocate() {
+  const vs = Math.max(P.voxelSize, minVoxelSize());
+  const nx = Math.ceil(P.worldSize / vs);
+  const ny = Math.max(1, Math.ceil(P.thickness / vs));
+  for (const t of [grid.column, grid.fine, grid.coarse]) if (t) gl.deleteTexture(t);
+  Object.assign(grid, {
+    vs, nx, ny, nz: nx,
+    cx: Math.ceil(nx / COARSE[0]), cy: Math.ceil(ny / COARSE[1]), cz: Math.ceil(nx / COARSE[2]),
+  });
+  grid.column = makeTex(gl.TEXTURE_2D, gl.RGBA16F, grid.nx, grid.nz);
+  grid.fine = makeTex(gl.TEXTURE_3D, gl.R8, grid.nx, grid.nz, grid.ny);
+  grid.coarse = makeTex(gl.TEXTURE_3D, gl.R8, grid.cx, grid.cz, grid.cy);
+}
+
+function setFieldUniforms(p) {
+  gl.uniform1ui(p.u('uSeed'), P.seed);
+  gl.uniform1f(p.u('uVS'), grid.vs);
+  gl.uniform1f(p.u('uT'), simTime);
+  gl.uniform1f(p.u('uEvolve'), P.evolve);
+  gl.uniform2f(p.u('uWind'), P.windX, P.windZ);
+}
+
+function regenerate() {
+  // Unbind the render-pass volumes so no generation pass samples the texture it writes.
+  for (const unit of [gl.TEXTURE0, gl.TEXTURE1]) {
+    gl.activeTexture(unit);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+  }
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.disable(gl.BLEND);
+
+  // Column field.
+  gl.useProgram(progColumn);
+  setFieldUniforms(progColumn);
+  gl.uniform1f(progColumn.u('uMapScale'), P.mapScale);
+  gl.uniform1i(progColumn.u('uOctaves'), P.octaves);
+  gl.uniform1f(progColumn.u('uGain'), P.gain);
+  gl.uniform1f(progColumn.u('uContrast'), P.contrast);
+  gl.uniform1f(progColumn.u('uWarpScale'), P.warpScale);
+  gl.uniform1f(progColumn.u('uWarpStrength'), P.warpStrength);
+  gl.uniform1f(progColumn.u('uRegionScale'), P.regionScale);
+  gl.uniform1f(progColumn.u('uRegionStrength'), P.regionStrength);
+  gl.uniform1f(progColumn.u('uCoverage'), P.coverage);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, grid.column, 0);
+  gl.viewport(0, 0, grid.nx, grid.nz);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  // Voxel layers.
+  gl.useProgram(progVoxel);
+  setFieldUniforms(progVoxel);
+  gl.uniform1f(progVoxel.u('uThickness'), grid.ny * grid.vs);
+  gl.uniform1f(progVoxel.u('uTower'), P.tower);
+  gl.uniform1f(progVoxel.u('uRoundness'), P.roundness);
+  gl.uniform1f(progVoxel.u('uBaseFlat'), P.baseFlat);
+  gl.uniform1f(progVoxel.u('uDetailScale'), P.detailScale);
+  gl.uniform1f(progVoxel.u('uDetailStrength'), P.detailStrength);
+  gl.uniform1i(progVoxel.u('uDetailOctaves'), P.detailOctaves);
+  gl.uniform1i(progVoxel.u('uColumn'), 0);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, grid.column);
+  for (let y = 0; y < grid.ny; y++) {
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, grid.fine, 0, y);
+    gl.uniform1i(progVoxel.u('uLayer'), y);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // Coarse occupancy.
+  gl.useProgram(progCoarse);
+  gl.uniform1i(progCoarse.u('uFine'), 0);
+  gl.uniform3i(progCoarse.u('uDims'), grid.nx, grid.ny, grid.nz);
+  gl.bindTexture(gl.TEXTURE_3D, grid.fine);
+  gl.viewport(0, 0, grid.cx, grid.cz);
+  for (let y = 0; y < grid.cy; y++) {
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, grid.coarse, 0, y);
+    gl.uniform1i(progCoarse.u('uLayer'), y);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  lastRegen = performance.now();
+  fieldDirty = false;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Camera and input
+// ---------------------------------------------------------------------------------------------------------------------
+
+const cam = { x: 4200, y: 170, z: 4200, yaw: Math.PI * 0.25, pitch: 0.12, speed: 60 };
+const keys = new Set();
+
+function camBasis() {
+  const cp = Math.cos(cam.pitch);
+  const fwd = [Math.sin(cam.yaw) * cp, Math.sin(cam.pitch), Math.cos(cam.yaw) * cp];
+  const right = norm(cross(fwd, [0, 1, 0]));
+  const up = cross(right, fwd);
+  return { fwd, right, up };
+}
+function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function norm(a) { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+
+let dragging = false;
+canvas.addEventListener('pointerdown', (e) => { dragging = true; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', (e) => { dragging = false; canvas.releasePointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  cam.yaw -= e.movementX * 0.004;
+  cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch - e.movementY * 0.004));
+});
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cam.speed = Math.max(2, Math.min(5000, cam.speed * Math.pow(1.15, -Math.sign(e.deltaY))));
+}, { passive: false });
+addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.code === 'KeyH') document.getElementById('panel').classList.toggle('hidden');
+  keys.add(e.code);
+  if (e.code === 'Space') e.preventDefault();
+});
+addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+function updateCamera(dt) {
+  const s = cam.speed * dt * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 1);
+  const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
+  // Right vector of the horizontal forward (matches camBasis: cross(fwd, up)).
+  const rx = -fz, rz = fx;
+  if (keys.has('KeyW')) { cam.x += fx * s; cam.z += fz * s; }
+  if (keys.has('KeyS')) { cam.x -= fx * s; cam.z -= fz * s; }
+  if (keys.has('KeyD')) { cam.x += rx * s; cam.z += rz * s; }
+  if (keys.has('KeyA')) { cam.x -= rx * s; cam.z -= rz * s; }
+  if (keys.has('Space')) cam.y += s;
+  if (keys.has('KeyC')) cam.y -= s;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------------------------------------------------
+
+let fieldDirty = true, allocDirty = true, paused = false;
+let simTime = 0, lastRegen = 0;
+const outputs = {}, inputs = {};
+
+function fmt(v, step) {
+  return step >= 1 ? String(Math.round(v)) : v.toFixed(Math.min(3, Math.max(0, -Math.floor(Math.log10(step)))));
+}
+
+function buildUI() {
+  const root = document.getElementById('controls');
+  let group = null;
+  for (const [g, key, label, min, max, step, , kind] of PARAM_SPEC) {
+    if (g !== group) {
+      group = g;
+      const h = document.createElement('h2');
+      h.textContent = g;
+      root.appendChild(h);
+    }
+    const row = document.createElement('div');
+    row.className = 'row';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    lab.title = label;
+    const inp = document.createElement('input');
+    Object.assign(inp, { type: 'range', min, max, step, value: P[key] });
+    const out = document.createElement('output');
+    out.textContent = fmt(P[key], step);
+    inp.addEventListener('input', () => {
+      P[key] = parseFloat(inp.value);
+      out.textContent = fmt(P[key], step);
+      if (kind === 'alloc') allocDirty = true;
+      if (kind) fieldDirty = true;
+    });
+    row.append(lab, inp, out);
+    root.appendChild(row);
+    inputs[key] = inp;
+    outputs[key] = [out, step];
+  }
+  const h = document.createElement('h2');
+  h.textContent = 'Debug';
+  root.appendChild(h);
+  for (const [key, label] of TOGGLES) {
+    const lab = document.createElement('label');
+    lab.className = 'check';
+    const inp = document.createElement('input');
+    inp.type = 'checkbox';
+    inp.checked = P[key];
+    inp.addEventListener('change', () => { P[key] = inp.checked; });
+    lab.append(inp, label);
+    root.appendChild(lab);
+  }
+
+  const presets = document.getElementById('presets');
+  for (const [name, values] of Object.entries(PRESETS)) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.addEventListener('click', () => {
+      for (const s of PARAM_SPEC) if (!(s[1] in values) && s[7] && s[1] !== 'seed') P[s[1]] = s[6];
+      Object.assign(P, values);
+      syncUI();
+      allocDirty = fieldDirty = true;
+    });
+    presets.appendChild(b);
+  }
+
+  const pauseBtn = document.getElementById('pause');
+  pauseBtn.addEventListener('click', () => { paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; });
+  document.getElementById('regen').addEventListener('click', () => { fieldDirty = true; });
+  document.getElementById('topview').addEventListener('click', () => {
+    Object.assign(cam, { x: P.worldSize / 2, y: P.cloudBase + P.thickness + 4000, z: P.worldSize / 2, pitch: -1.55 });
+  });
+}
+
+function syncUI() {
+  for (const key in inputs) {
+    inputs[key].value = P[key];
+    outputs[key][0].textContent = fmt(P[key], outputs[key][1]);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Frame loop
+// ---------------------------------------------------------------------------------------------------------------------
+
+const statsEl = document.getElementById('stats');
+let lastFrame = performance.now(), fpsAcc = 0, fpsFrames = 0, fps = 0;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.floor(innerWidth * dpr * P.resScale));
+  const h = Math.max(1, Math.floor(innerHeight * dpr * P.resScale));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+function render() {
+  const { fwd, right, up } = camBasis();
+  const sa = P.sunAzimuth * Math.PI / 180, se = P.sunElevation * Math.PI / 180;
+  const sun = [Math.cos(se) * Math.sin(sa), Math.sin(se), Math.cos(se) * Math.cos(sa)];
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(progRender);
+  const u = progRender.u;
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_3D, grid.fine);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_3D, grid.coarse);
+  gl.uniform1i(u('uFine'), 0);
+  gl.uniform1i(u('uCoarse'), 1);
+  gl.uniform3f(u('uDims'), grid.nx, grid.ny, grid.nz);
+  gl.uniform3f(u('uCamPos'), cam.x, cam.y, cam.z);
+  gl.uniform3fv(u('uCamFwd'), fwd);
+  gl.uniform3fv(u('uCamRight'), right);
+  gl.uniform3fv(u('uCamUp'), up);
+  gl.uniform2f(u('uRes'), canvas.width, canvas.height);
+  gl.uniform1f(u('uTanHalfFov'), Math.tan(P.fov * Math.PI / 360));
+  gl.uniform1f(u('uVS'), grid.vs);
+  gl.uniform1f(u('uBase'), P.cloudBase);
+  gl.uniform1f(u('uGround'), 63);
+  gl.uniform1f(u('uFog'), P.fog);
+  gl.uniform1f(u('uWorld'), grid.nx * grid.vs);
+  gl.uniform3fv(u('uSunDir'), sun);
+  gl.uniform1i(u('uMaxSteps'), P.maxSteps);
+  gl.uniform1i(u('uShadowSteps'), P.shadowSteps);
+  gl.uniform1i(u('uAO'), P.ao ? 1 : 0);
+  gl.uniform1i(u('uShowCoarse'), P.showCoarse ? 1 : 0);
+  gl.uniform1i(u('uGroundGrid'), P.groundGrid ? 1 : 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.activeTexture(gl.TEXTURE0);
+
+  if (P.minimap) {
+    const size = Math.round(Math.min(canvas.width, canvas.height) * 0.28);
+    const x = canvas.width - size - 8, y = 8;
+    gl.viewport(x, y, size, size);
+    gl.useProgram(progMinimap);
+    gl.bindTexture(gl.TEXTURE_2D, grid.column);
+    gl.uniform1i(progMinimap.u('uColumn'), 0);
+    gl.uniform4f(progMinimap.u('uRect'), x, y, size, size);
+    gl.uniform2f(progMinimap.u('uCamXZ'), cam.x, cam.z);
+    gl.uniform2f(progMinimap.u('uCamDir'), Math.sin(cam.yaw), Math.cos(cam.yaw));
+    gl.uniform1f(progMinimap.u('uWorld'), grid.nx * grid.vs);
+    gl.uniform1f(progMinimap.u('uTower'), P.tower);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+}
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - lastFrame) / 1000);
+  lastFrame = now;
+  fpsAcc += dt; fpsFrames++;
+  if (fpsAcc > 0.5) { fps = fpsFrames / fpsAcc; fpsAcc = 0; fpsFrames = 0; }
+
+  updateCamera(dt);
+  if (!paused && P.timeScale > 0) {
+    simTime += dt * P.timeScale;
+    if ((P.evolve > 0 || P.windX !== 0 || P.windZ !== 0) && now - lastRegen >= P.regenInterval) fieldDirty = true;
+  }
+  resize();
+  if (allocDirty) { allocate(); allocDirty = false; fieldDirty = true; }
+  let regenMs = null;
+  if (fieldDirty) { const t0 = performance.now(); regenerate(); regenMs = performance.now() - t0; }
+  render();
+
+  const voxels = grid.nx * grid.ny * grid.nz;
+  const clamped = grid.vs !== P.voxelSize ? ` (min ${grid.vs} for GPU limits)` : '';
+  statsEl.textContent =
+    `${fps.toFixed(0)} fps   ${canvas.width}x${canvas.height}\n` +
+    `grid ${grid.nx} x ${grid.ny} x ${grid.nz} = ${(voxels / 1e6).toFixed(1)} M voxels\n` +
+    `voxel ${grid.vs} blocks${clamped}\n` +
+    `coarse ${grid.cx} x ${grid.cy} x ${grid.cz}\n` +
+    `camera ${cam.x.toFixed(0)} ${cam.y.toFixed(0)} ${cam.z.toFixed(0)}  speed ${cam.speed.toFixed(0)}\n` +
+    `time ${simTime.toFixed(1)} s${paused ? ' (paused)' : ''}` +
+    (regenMs !== null ? `\nrebuild submit ${regenMs.toFixed(1)} ms` : '');
+  requestAnimationFrame(frame);
+}
+
+buildUI();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

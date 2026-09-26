@@ -32,3 +32,15 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **User requirement — 2026-09-26:** Maintain `Memory.md` for project state and this file for idea provenance.
 - **User requirement — 2026-09-26:** Provenance descriptions should distinguish ideas suggested by the user, ideas
   proposed by the agent and approved by the user, and facts obtained from named web sources.
+
+### Voxel cloud web demo
+
+- **User requirement — 2026-09-26:** Build a web demo for experimenting with 3D voxel clouds. The clouds are derived
+  from a field, and the field morphs over time, which morphs the clouds. Noise is sampled and turned into voxel or no
+  voxel. The field covers about 10000 blocks on X/Z, each cloud voxel is a multiple of a Minecraft block, and the
+  field can be shaped with parameters.
+- **Agent proposal — 2026-09-26 (not yet approved):** A split into a 2D column field and a 3D voxel field, a
+  `clamp(cov*tower) - h^roundness` height profile, a flat base achieved by preventing detail from adding volume near
+  h = 0, and time evolution through wind translation plus a noise time axis. Also a coarse occupancy grid for
+  DDA empty-space skipping, and PCG-style integer hashing for gradient noise. All of these come from the agent's
+  general graphics knowledge; no web sources were used.

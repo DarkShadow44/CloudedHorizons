@@ -30,9 +30,26 @@ Rendering code and mixins must be compatible with that environment.
 - The configured mixin package is `com.cloudedhorizons.mixin`.
 - The mixin package currently contains only `package-info.java`; no functional mixins have been added.
 - No cloud generation or rendering implementation exists yet.
-- No web demo exists yet.
+- A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been
+  verified in a browser by the agent.
 
 ## Agreed Cloud Direction
 
 The first major deliverable is an offline, dependency-free WebGL2 demo for experimenting with procedural voxel
 cumulus clouds.
+
+### Web demo design (webdemo/index.html)
+
+- The world is a square field, 10000 blocks by default, and uses a voxel grid whose voxel edge is an integer number
+  of blocks (8 by default). The GPU 3D texture size limit sets the smallest allowed voxel size.
+- The field is built in three GPU passes:
+  1. A 2D column field (RGBA16F): domain-warped fBm gradient noise, plus a low-frequency "weather" modulation, minus a
+     coverage threshold. Values above 0 mark columns that can hold cloud.
+  2. The voxel layers (R8 3D texture, laid out x,z,y): a height profile `clamp(cov*tower) - h^roundness` plus 3D
+     detail noise. The detail is kept from adding volume near the base so the base stays flat. A voxel is solid
+     when the result is above 0.
+  3. Coarse occupancy (8x4x8 voxels) for empty-space skipping.
+- The field morphs over time through wind offset and a time-evolved noise axis. The grid is rebuilt every
+  `regenInterval` ms.
+- Rendering is a fullscreen DDA raycast with coarse skipping, face shading, traced sun shadows (also cast on the
+  ground), and per-face voxel AO and fog.
