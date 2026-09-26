@@ -31,6 +31,9 @@ public final class CloudEditorScreen extends CustomModularScreen {
     private static final double MAX_SCALE = 100000.0D;
     private static final double SLIDER_MIN_SCALE = 1.0D;
     private static final double SLIDER_MAX_SCALE = 256.0D;
+    /** Cutoff limits; the noise is roughly -1..1, so values outside that are all or nothing. */
+    private static final double MIN_CUTOFF = -1.0D;
+    private static final double MAX_CUTOFF = 1.0D;
 
     private static final int ROW_HEIGHT = 18;
     private static final int FIRST_ROW = 22;
@@ -44,7 +47,7 @@ public final class CloudEditorScreen extends CustomModularScreen {
     @Override
     public ModularPanel buildUI(ModularGuiContext context) {
         rows = 0;
-        ModularPanel panel = ModularPanel.defaultPanel("cloud_editor", 220, FIRST_ROW + 4 * ROW_HEIGHT + 6);
+        ModularPanel panel = ModularPanel.defaultPanel("cloud_editor", 220, FIRST_ROW + 5 * ROW_HEIGHT + 6);
         panel.child(IKey.str("Cloud Editor").asWidget().top(7).left(7));
 
         addRow(
@@ -56,6 +59,11 @@ public final class CloudEditorScreen extends CustomModularScreen {
                         MAX_HEIGHT,
                         CloudRenderer::getFieldHeight,
                         v -> CloudRenderer.setFieldHeight((int) Math.round(v))));
+        addRow(
+                panel,
+                "Cutoff",
+                doubleField(CloudRenderer::getCutoff, CloudRenderer::setCutoff, MIN_CUTOFF, MAX_CUTOFF),
+                slider(MIN_CUTOFF, MAX_CUTOFF, CloudRenderer::getCutoff, v -> CloudRenderer.setCutoff(round2(v))));
         addScaleRow(panel, "Scale X", CloudRenderer::getNoiseScaleX, CloudRenderer::setNoiseScaleX);
         addScaleRow(panel, "Scale Y", CloudRenderer::getNoiseScaleY, CloudRenderer::setNoiseScaleY);
         addScaleRow(panel, "Scale Z", CloudRenderer::getNoiseScaleZ, CloudRenderer::setNoiseScaleZ);
@@ -66,7 +74,7 @@ public final class CloudEditorScreen extends CustomModularScreen {
         addRow(
                 panel,
                 label,
-                doubleField(getter, setter),
+                doubleField(getter, setter, MIN_SCALE, MAX_SCALE),
                 slider(SLIDER_MIN_SCALE, SLIDER_MAX_SCALE, getter, v -> setter.accept(round2(v))));
     }
 
@@ -99,14 +107,14 @@ public final class CloudEditorScreen extends CustomModularScreen {
         return field;
     }
 
-    private static TextFieldWidget doubleField(DoubleSupplier getter, DoubleConsumer setter) {
+    private static TextFieldWidget doubleField(DoubleSupplier getter, DoubleConsumer setter, double min, double max) {
         LiveField field = new LiveField(text -> {
             double v = Double.parseDouble(text);
-            if (!(v >= MIN_SCALE && v <= MAX_SCALE)) return false;
+            if (!(v >= min && v <= max)) return false;
             if (v != getter.getAsDouble()) setter.accept(v);
             return true;
         });
-        field.setNumbersDouble(v -> Math.max(MIN_SCALE, Math.min(MAX_SCALE, v)));
+        field.setNumbersDouble(v -> Math.max(min, Math.min(max, v)));
         field.value(new DoubleValue.Dynamic(getter, setter));
         return field;
     }

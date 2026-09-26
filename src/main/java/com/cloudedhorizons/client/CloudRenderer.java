@@ -122,6 +122,15 @@ public final class CloudRenderer {
         saveLater();
     }
 
+    public static double getCutoff() {
+        return Config.cutoff;
+    }
+
+    public static void setCutoff(double cutoff) {
+        Config.cutoff = cutoff;
+        fieldChanged();
+    }
+
     public static double getNoiseScaleX() {
         return Config.noiseScaleX;
     }
@@ -414,6 +423,7 @@ public final class CloudRenderer {
                 (float) Config.noiseScaleX,
                 (float) Config.noiseScaleY,
                 (float) Config.noiseScaleZ);
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uCutoff"), (float) Config.cutoff);
         // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));
         int layerLocation = GL20.glGetUniformLocation(generateProgram, "uLayer");

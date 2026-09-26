@@ -8,10 +8,10 @@ uniform float uVS;        // voxel size in blocks
 uniform vec2 uOriginXZ;   // world X/Z of the volume's minimum corner
 uniform float uEvolve;
 uniform vec3 uNoiseScale; // noise feature size per axis (x, y, z), in voxels
+uniform float uCutoff;    // voxel is solid where the noise is above this
 
 out vec4 outColor;
 
-const float CUTOUT = 0.3;
 
 float snoise4(vec4 v); // noise.fsh
 
@@ -20,5 +20,5 @@ void main() {
     vec2 xz = uOriginXZ / uVS + floor(gl_FragCoord.xy) + 0.5;
     vec3 v = vec3(xz.x, float(uLayer) + 0.5, xz.y);
     float n = snoise4(vec4(v / max(uNoiseScale, vec3(1e-3)), uEvolve));
-    outColor = vec4(n > CUTOUT ? 1.0 : 0.0);
+    outColor = vec4(n > uCutoff ? 1.0 : 0.0);
 }

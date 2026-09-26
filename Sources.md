@@ -104,3 +104,4 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **User requirement — 2026-09-26:** Make the in-game cloud field 10 times the radius (256 -> 2560 voxels).
 - **Agent proposal — 2026-09-26:** Port the webdemo's coarse occupancy skipping (8x4x8 cells) to the mod, spread
   regeneration over frames one 4-layer slab at a time, and clamp the size to `GL_MAX_3D_TEXTURE_SIZE`.
+- **User requirement — 2026-09-26:** Make the noise cutoff configurable.

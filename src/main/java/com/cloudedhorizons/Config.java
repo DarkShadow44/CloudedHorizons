@@ -19,6 +19,8 @@ public final class Config {
     public static double noiseScaleX = 32.0D;
     public static double noiseScaleY = 32.0D;
     public static double noiseScaleZ = 32.0D;
+    /** Noise threshold: a voxel is solid where the noise (roughly -1..1) is above it. */
+    public static double cutoff = 0.3D;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -38,6 +40,7 @@ public final class Config {
             cloudHeight = cloudHeightProperty().getDouble();
             morphSpeed = morphSpeedProperty().getDouble();
             fieldHeight = fieldHeightProperty().getInt();
+            cutoff = cutoffProperty().getDouble();
             noiseScaleX = noiseScaleProperty("X").getDouble();
             noiseScaleY = noiseScaleProperty("Y").getDouble();
             noiseScaleZ = noiseScaleProperty("Z").getDouble();
@@ -56,6 +59,7 @@ public final class Config {
         cloudHeightProperty().set(cloudHeight);
         morphSpeedProperty().set(morphSpeed);
         fieldHeightProperty().set(fieldHeight);
+        cutoffProperty().set(cutoff);
         noiseScaleProperty("X").set(noiseScaleX);
         noiseScaleProperty("Y").set(noiseScaleY);
         noiseScaleProperty("Z").set(noiseScaleZ);
@@ -72,6 +76,14 @@ public final class Config {
                 "fieldHeight",
                 24,
                 "Height of the cloud field in voxels. Clouds are cut off below and above it.");
+    }
+
+    private static Property cutoffProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "cutoff",
+                0.3D,
+                "Noise threshold (noise is roughly -1..1). Voxels above it are cloud; higher values mean fewer clouds.");
     }
 
     private static Property noiseScaleProperty(String axis) {
