@@ -24,8 +24,9 @@ import org.lwjgl.opengl.GL32;
 import org.apache.commons.io.IOUtils;
 
 /**
- * Smoke-test GPU cloud renderer. On first use, a fragment shader generates a static voxel volume into a 3D texture,
- * one layer per draw. Each frame, the volume's bounding box is drawn and a DDA raymarch finds the voxel surface and
+ * Smoke-test GPU cloud renderer. A fragment shader generates the voxel volume into a 3D texture, one layer per draw.
+ * The field's time axis advances at {@link #getMorphSpeed()}, and the volume is regenerated every
+ * {@link #REGEN_INTERVAL_TICKS} ticks while it changes. Each frame, the volume's bounding box is drawn and a DDA raymarch finds the voxel surface and
  * writes its depth.
  */
 public final class CloudRenderer {
@@ -39,6 +40,15 @@ public final class CloudRenderer {
     private static final double ORIGIN_X = -SIZE_X * VOXEL_SIZE / 2.0D;
     private static final double ORIGIN_Z = -SIZE_Z * VOXEL_SIZE / 2.0D;
     private static final int SEED = 1;
+    /** Regenerate the volume at most this often, in world ticks. */
+    private static final double REGEN_INTERVAL_TICKS = 2.0D;
+    private static final float DEFAULT_MORPH_SPEED = 0.02F;
+
+    /** Noise time-axis units per second of game time. */
+    private static float morphSpeed = DEFAULT_MORPH_SPEED;
+    private static double morphPhase;
+    private static double lastWorldTime = Double.NaN;
+    private static double lastRegenTime = Double.NEGATIVE_INFINITY;
 
     private static boolean initialized;
     private static boolean failed;
@@ -49,11 +59,20 @@ public final class CloudRenderer {
     private static int emptyVao;
     private static int cubeVao;
     private static int cubeVbo;
+    private static int generateFbo;
 
     private static final FloatBuffer MATRIX = GLAllocation.createDirectFloatBuffer(16);
     private static final FloatBuffer PROJECTION = GLAllocation.createDirectFloatBuffer(16);
 
     private CloudRenderer() {}
+
+    public static float getMorphSpeed() {
+        return morphSpeed;
+    }
+
+    public static void setMorphSpeed(float speed) {
+        morphSpeed = speed;
+    }
 
     public static void render(Minecraft mc, World world, float partialTicks) {
         if (failed) {
@@ -69,6 +88,7 @@ public final class CloudRenderer {
                 return;
             }
         }
+        updateMorph(mc, world, partialTicks);
 
         GL11.glGetFloatv(GL11.GL_MODELVIEW_MATRIX, MATRIX);
         GL11.glGetFloatv(GL11.GL_PROJECTION_MATRIX, PROJECTION);
@@ -132,7 +152,27 @@ public final class CloudRenderer {
         emptyVao = GL30.glGenVertexArrays();
         createCube();
         createVoxelTexture();
+        generateFbo = GL30.glGenFramebuffers();
         generate(mc);
+    }
+
+    /**
+     * Advances the morph phase by the game time elapsed since the last frame, so it stops while the game is paused
+     * and a speed change does not make it jump.
+     */
+    private static void updateMorph(Minecraft mc, World world, float partialTicks) {
+        double now = world.getTotalWorldTime() + partialTicks;
+        if (Double.isNaN(lastWorldTime) || now < lastWorldTime || now - lastWorldTime > 100.0D) {
+            // First frame, world change, or a large time skip: do not advance.
+            lastWorldTime = now;
+            return;
+        }
+        morphPhase += (now - lastWorldTime) / 20.0D * morphSpeed;
+        lastWorldTime = now;
+        if (morphSpeed != 0.0F && now - lastRegenTime >= REGEN_INTERVAL_TICKS) {
+            lastRegenTime = now;
+            generate(mc);
+        }
     }
 
     private static void createVoxelTexture() {
@@ -159,10 +199,9 @@ public final class CloudRenderer {
         GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
     }
 
-    /** Runs the generation shader once per voxel layer into the 3D texture, then restores Minecraft's framebuffer. */
+    /** Runs the generation shader once per voxel layer into the 3D texture, then restores Minecraft's GL state. */
     private static void generate(Minecraft mc) {
-        int fbo = GL30.glGenFramebuffers();
-        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, generateFbo);
         GL11.glViewport(0, 0, SIZE_X, SIZE_Z);
         GL11.glDisable(GL11.GL_DEPTH_TEST);
         GL11.glDisable(GL11.GL_BLEND);
@@ -176,6 +215,8 @@ public final class CloudRenderer {
                 (float) ORIGIN_X,
                 (float) ORIGIN_Z);
         GL30.glUniform1ui(GL20.glGetUniformLocation(generateProgram, "uSeed"), SEED);
+        // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));
         int layerLocation = GL20.glGetUniformLocation(generateProgram, "uLayer");
 
         GL30.glBindVertexArray(emptyVao);
@@ -194,7 +235,6 @@ public final class CloudRenderer {
         GL20.glUseProgram(0);
 
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
-        GL30.glDeleteFramebuffers(fbo);
         if (OpenGlHelper.isFramebufferEnabled()) {
             mc.getFramebuffer().bindFramebuffer(true);
         } else {

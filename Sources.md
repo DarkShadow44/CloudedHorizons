@@ -58,3 +58,7 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   knowledge.
 - **Experiment — 2026-09-26:** The GTNH convention plugin resolves `mixinsPackage` relative to `modGroup`; this was
   learned from the user's build error.
+- **User requirement — 2026-09-26:** The field morphs the clouds slowly, with no movement or wind. A command
+  `/clouds morph` reports the morph speed, and `/clouds morph <float>` sets it.
+- **Agent proposal — 2026-09-26:** Advance the morph phase from game-time deltas so it pauses with the game and speed
+  changes don't make it jump, and throttle regeneration to every 2 ticks.

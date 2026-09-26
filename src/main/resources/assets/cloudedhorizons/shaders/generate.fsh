@@ -1,12 +1,14 @@
 #version 330 core
 // Writes one horizontal layer (y) of the voxel volume: 1 = solid, 0 = empty.
-// Same field as webdemo/index.html (column field + height profile + detail), with time frozen.
+// Same field as webdemo/index.html (column field + height profile + detail), without wind.
+// uEvolve moves the noise along its time axis, which morphs the clouds in place.
 
 uniform int uLayer;
 uniform int uHeight;      // voxel layers in the volume
 uniform float uVS;        // voxel size in blocks
 uniform vec2 uOriginXZ;   // world X/Z of the volume's minimum corner
 uniform uint uSeed;
+uniform float uEvolve;
 
 out vec4 outColor;
 
@@ -71,10 +73,10 @@ float fbm(vec3 p, int octaves, float gain) {
 void main() {
     vec2 q = uOriginXZ + (floor(gl_FragCoord.xy) + 0.5) * uVS;
 
-    vec2 warp = vec2(fbm(vec3(q / WARP_SCALE, 11.3), 3, 0.5),
-                     fbm(vec3(q / WARP_SCALE + 37.1, -5.2), 3, 0.5)) * WARP_STRENGTH;
-    float m = fbm(vec3((q + warp) / MAP_SCALE, 0.0), OCTAVES, GAIN) * 0.5 * CONTRAST + 0.5;
-    float region = fbm(vec3(q / REGION_SCALE + 91.7, 3.1), 3, 0.5);
+    vec2 warp = vec2(fbm(vec3(q / WARP_SCALE, uEvolve * 0.7 + 11.3), 3, 0.5),
+                     fbm(vec3(q / WARP_SCALE + 37.1, uEvolve * 0.7 - 5.2), 3, 0.5)) * WARP_STRENGTH;
+    float m = fbm(vec3((q + warp) / MAP_SCALE, uEvolve), OCTAVES, GAIN) * 0.5 * CONTRAST + 0.5;
+    float region = fbm(vec3(q / REGION_SCALE + 91.7, uEvolve * 0.3 + 3.1), 3, 0.5);
     float cov = m + region * REGION_STRENGTH - (1.0 - COVERAGE);
     if (cov + DETAIL_STRENGTH <= 0.0) { outColor = vec4(0.0); return; }
 
@@ -82,7 +84,7 @@ void main() {
     float h = clamp(y / (float(uHeight) * uVS), 0.0, 1.0);
     float d = clamp(cov * TOWER, 0.0, 1.0) - pow(h, ROUNDNESS);
 
-    float detail = fbm(vec3(q.x, y, q.y) / DETAIL_SCALE, DETAIL_OCTAVES, 0.5);
+    float detail = fbm(vec3(q.x, y, q.y) / DETAIL_SCALE + vec3(0.0, 0.0, uEvolve * 3.0), DETAIL_OCTAVES, 0.5);
     float baseMask = mix(1.0, smoothstep(0.0, 0.25, h), BASE_FLAT);
     d += detail * DETAIL_STRENGTH * (detail > 0.0 ? baseMask : 1.0);
 
