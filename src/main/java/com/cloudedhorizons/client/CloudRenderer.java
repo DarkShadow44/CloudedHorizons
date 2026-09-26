@@ -35,7 +35,8 @@ public final class CloudRenderer {
 
     private static final int VOXEL_SIZE = 8;
     private static final int SIZE_X = 256;
-    private static final int SIZE_Y = 24;
+    /** Upper limit for the number of voxel layers, to keep the 3D texture and regeneration cost bounded. */
+    private static final int MAX_LAYERS = 128;
     private static final int SIZE_Z = 256;
     /** World position of the volume's minimum corner, centred on the world origin. */
     private static final double ORIGIN_X = -SIZE_X * VOXEL_SIZE / 2.0D;
@@ -47,6 +48,9 @@ public final class CloudRenderer {
     private static double morphPhase;
     private static double lastWorldTime = Double.NaN;
     private static double lastRegenTime = Double.NEGATIVE_INFINITY;
+
+    /** Number of voxel layers the 3D texture is currently allocated with. */
+    private static int allocatedLayers;
 
     private static boolean initialized;
     private static boolean failed;
@@ -83,6 +87,22 @@ public final class CloudRenderer {
         Config.saveClouds();
     }
 
+    /** Height of the cloud field in voxels. */
+    public static int getFieldHeight() {
+        return Config.fieldHeight;
+    }
+
+    public static void setFieldHeight(int voxels) {
+        // The texture is reallocated and regenerated on the next frame (see render).
+        Config.fieldHeight = voxels;
+        Config.saveClouds();
+    }
+
+    /** Voxel layers to allocate: the configured field height, limited to 1..MAX_LAYERS. */
+    private static int layers() {
+        return Math.max(1, Math.min(MAX_LAYERS, Config.fieldHeight));
+    }
+
     public static void render(Minecraft mc, World world, float partialTicks) {
         if (failed) {
             return;
@@ -96,6 +116,10 @@ public final class CloudRenderer {
                 e.printStackTrace();
                 return;
             }
+        }
+        if (layers() != allocatedLayers) {
+            allocateVoxelTexture();
+            generate(mc);
         }
         updateMorph(mc, world, partialTicks);
 
@@ -125,9 +149,9 @@ public final class CloudRenderer {
         GL20.glUniform3f(
                 GL20.glGetUniformLocation(volumeProgram, "uBoxSize"),
                 SIZE_X * VOXEL_SIZE,
-                SIZE_Y * VOXEL_SIZE,
+                allocatedLayers * VOXEL_SIZE,
                 SIZE_Z * VOXEL_SIZE);
-        GL20.glUniform3f(GL20.glGetUniformLocation(volumeProgram, "uDims"), SIZE_X, SIZE_Y, SIZE_Z);
+        GL20.glUniform3f(GL20.glGetUniformLocation(volumeProgram, "uDims"), SIZE_X, allocatedLayers, SIZE_Z);
         GL20.glUniform1f(GL20.glGetUniformLocation(volumeProgram, "uVS"), VOXEL_SIZE);
         GL20.glUniform3f(
                 GL20.glGetUniformLocation(volumeProgram, "uColour"),
@@ -161,6 +185,7 @@ public final class CloudRenderer {
         emptyVao = GL30.glGenVertexArrays();
         createCube();
         createVoxelTexture();
+        allocateVoxelTexture();
         generateFbo = GL30.glGenFramebuffers();
         generate(mc);
     }
@@ -193,6 +218,13 @@ public final class CloudRenderer {
         GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
+    }
+
+    /** (Re)allocates the voxel texture storage for the configured field height. */
+    private static void allocateVoxelTexture() {
+        allocatedLayers = layers();
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
         // Layout (x, z, y): each generation draw fills one horizontal layer.
         GL12.glTexImage3D(
                 GL12.GL_TEXTURE_3D,
@@ -200,7 +232,7 @@ public final class CloudRenderer {
                 GL30.GL_R8,
                 SIZE_X,
                 SIZE_Z,
-                SIZE_Y,
+                allocatedLayers,
                 0,
                 GL11.GL_RED,
                 GL11.GL_UNSIGNED_BYTE,
@@ -228,7 +260,7 @@ public final class CloudRenderer {
         int layerLocation = GL20.glGetUniformLocation(generateProgram, "uLayer");
 
         GL30.glBindVertexArray(emptyVao);
-        for (int layer = 0; layer < SIZE_Y; layer++) {
+        for (int layer = 0; layer < allocatedLayers; layer++) {
             GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, voxelTexture, 0, layer);
             if (layer == 0) {
                 int status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);

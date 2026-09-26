@@ -91,3 +91,8 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   bound to a configurable key. It will later become the cloud editor.
 - **Agent proposal — 2026-09-26:** A vanilla `KeyBinding` (default K) so it is rebindable in Controls, and a
   `CustomModularScreen` opened via `ClientGUI.open`. The MUI2 API names come from the agent's memory of the library.
+- **User requirement — 2026-09-26:** The first editor parameter is height (the cloud field's height), as a text
+  field that updates the clouds immediately.
+- **User requirement — 2026-09-26 (correction):** The editor's height means the vertical extent of the active cloud
+  field, which cuts the clouds off below and above, not its base Y.
+- **User requirement — 2026-09-26:** Cloud parameters such as height are in cloud voxels, not Minecraft blocks.

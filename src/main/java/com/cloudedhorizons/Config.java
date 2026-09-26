@@ -13,6 +13,8 @@ public final class Config {
     public static boolean enabled = true;
     /** World Y of the cloud volume's bottom face. */
     public static double cloudHeight = 160.0D;
+    /** Height of the cloud field in voxels; the field is cut off below and above it. */
+    public static int fieldHeight = 24;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -31,6 +33,7 @@ public final class Config {
                     "Whether Clouded Horizons features are enabled.");
             cloudHeight = cloudHeightProperty().getDouble();
             morphSpeed = morphSpeedProperty().getDouble();
+            fieldHeight = fieldHeightProperty().getInt();
         } finally {
             if (configuration.hasChanged()) {
                 configuration.save();
@@ -45,11 +48,20 @@ public final class Config {
         }
         cloudHeightProperty().set(cloudHeight);
         morphSpeedProperty().set(morphSpeed);
+        fieldHeightProperty().set(fieldHeight);
         configuration.save();
     }
 
     private static Property cloudHeightProperty() {
         return configuration.get(CATEGORY_CLOUDS, "height", 160.0D, "World Y of the bottom of the cloud layer.");
+    }
+
+    private static Property fieldHeightProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "fieldHeight",
+                24,
+                "Height of the cloud field in voxels. Clouds are cut off below and above it.");
     }
 
     private static Property morphSpeedProperty() {

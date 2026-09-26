@@ -13,6 +13,8 @@ Rendering code and mixins must be compatible with that environment.
 
 ## Working Rules
 
+- Cloud dimensions are specified in cloud voxels, not Minecraft blocks.
+
 - Do not access the web or make network requests.
 - Do not stage files in Git unless the user explicitly requests it.
 - Do not compile or build the Minecraft project unless the user explicitly requests it.
@@ -30,7 +32,7 @@ Rendering code and mixins must be compatible with that environment.
 - The configured mixin package is `com.cloudedhorizons.mixin`.
 - Smoke-test cloud replacement (built and running with static CPU voxels; the GPU version is not yet built):
   `MixinRenderGlobal` cancels `RenderGlobal.renderClouds` at the HEAD in surface worlds when `Config.enabled` is on,
-  and calls `client.CloudRenderer`. That renderer generates a static 256x24x256 volume of 8-block voxels (centred on
+  and calls `client.CloudRenderer`. That renderer generates a 256 x fieldHeight x 256 volume of 8-block voxels (centred on
   X/Z 0, base Y 160) once, on the GPU: `generate.fsh` writes one layer per draw into an R8 3D texture laid out
   x,z,y, using the webdemo field with the "Fair cumulus" constants and time frozen. It then draws the volume's
   bounding box (back faces, depth clamp) with `volume.fsh`, which runs a DDA raymarch and writes `gl_FragDepth`. The
@@ -55,8 +57,10 @@ Rendering code and mixins must be compatible with that environment.
   verified in a browser by the agent.
 
 - ModularUI2 (`com.github.GTNewHorizons:ModularUI2:2.3.91-1.7.10:dev`) is an `api` dependency, and the mod requires
-  `modularui2`. `client.CloudEditorScreen` (a `CustomModularScreen`) is a small panel that shows the height and morph
-  speed. It is the start of the cloud editor. `client.KeyBindings` registers "Open Cloud Editor" (default K,
+  `modularui2`. `client.CloudEditorScreen` (a `CustomModularScreen`) is the start of the cloud editor. Its first
+  parameter is a Height text field (`LiveNumberField`), which applies every valid edit immediately. It sets the
+  field height in voxels (`Config.fieldHeight`, config key `clouds.fieldHeight`, default 24, range 1..128), not the
+  base Y. `CloudRenderer` reallocates and regenerates the 3D texture when it changes. The field is cut off below the base and above base + thickness. `client.KeyBindings` registers "Open Cloud Editor" (default K,
   rebindable in Controls) and opens the screen with `ClientGUI.open`. The MUI2 API usage was written from memory, not
   checked against the jar, and has not been compiled.
 
