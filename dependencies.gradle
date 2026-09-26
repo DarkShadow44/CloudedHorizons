@@ -41,4 +41,5 @@
 dependencies {
     api("com.github.GTNewHorizons:lwjgl3ify:3.0.35:dev")
     api("com.github.GTNewHorizons:Angelica:2.2.19:dev")
+    api("com.github.GTNewHorizons:ModularUI2:2.3.91-1.7.10:dev")
 }

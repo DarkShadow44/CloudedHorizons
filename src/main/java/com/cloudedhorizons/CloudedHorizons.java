@@ -14,7 +14,8 @@ import cpw.mods.fml.common.event.FMLServerStartingEvent;
         modid = CloudedHorizons.MOD_ID,
         name = CloudedHorizons.MOD_NAME,
         version = Tags.VERSION,
-        acceptedMinecraftVersions = "[1.7.10]")
+        acceptedMinecraftVersions = "[1.7.10]",
+        dependencies = "required-after:modularui2")
 public final class CloudedHorizons {
 
     public static final String MOD_ID = "cloudedhorizons";

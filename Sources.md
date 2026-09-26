@@ -84,3 +84,10 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **User requirement — 2026-09-26:** Add `/clouds flyspeed` to set the player's fly speed.
 - **User requirement — 2026-09-26:** The fly speed should persist through the `flySpeed` in level.dat. The agent
   proposed setting it on the integrated server's `EntityPlayerMP`, which saves it.
+
+### Cloud editor UI
+
+- **User requirement — 2026-09-26:** Add GTNH ModularUI2 2.3.91-1.7.10 as an API dependency, and build a small UI
+  bound to a configurable key. It will later become the cloud editor.
+- **Agent proposal — 2026-09-26:** A vanilla `KeyBinding` (default K) so it is rebindable in Controls, and a
+  `CustomModularScreen` opened via `ClientGUI.open`. The MUI2 API names come from the agent's memory of the library.

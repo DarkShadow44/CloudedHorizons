@@ -54,6 +54,12 @@ Rendering code and mixins must be compatible with that environment.
 - A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been
   verified in a browser by the agent.
 
+- ModularUI2 (`com.github.GTNewHorizons:ModularUI2:2.3.91-1.7.10:dev`) is an `api` dependency, and the mod requires
+  `modularui2`. `client.CloudEditorScreen` (a `CustomModularScreen`) is a small panel that shows the height and morph
+  speed. It is the start of the cloud editor. `client.KeyBindings` registers "Open Cloud Editor" (default K,
+  rebindable in Controls) and opens the screen with `ClientGUI.open`. The MUI2 API usage was written from memory, not
+  checked against the jar, and has not been compiled.
+
 ## Agreed Cloud Direction
 
 The first major deliverable is an offline, dependency-free WebGL2 demo for experimenting with procedural voxel
