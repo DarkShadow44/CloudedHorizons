@@ -28,9 +28,16 @@ Rendering code and mixins must be compatible with that environment.
 - The current configuration contains a general `enabled` option.
 - Mixin support is enabled in `gradle.properties`.
 - The configured mixin package is `com.cloudedhorizons.mixin`.
-- Smoke-test cloud replacement (not yet built or run): `MixinRenderGlobal` cancels `RenderGlobal.renderClouds` at the
-  HEAD in surface worlds when `Config.enabled` is on, and calls `client.CloudRenderer`. That renderer draws a static
-  96x8x96 grid of 8-block voxels centred on world X/Z 0 at Y 160, using the Tessellator with exposed faces only.
+- Smoke-test cloud replacement (built and running with static CPU voxels; the GPU version is not yet built):
+  `MixinRenderGlobal` cancels `RenderGlobal.renderClouds` at the HEAD in surface worlds when `Config.enabled` is on,
+  and calls `client.CloudRenderer`. That renderer generates a static 256x24x256 volume of 8-block voxels (centred on
+  X/Z 0, base Y 160) once, on the GPU: `generate.fsh` writes one layer per draw into an R8 3D texture laid out
+  x,z,y, using the webdemo field with the "Fair cumulus" constants and time frozen. It then draws the volume's
+  bounding box (back faces, depth clamp) with `volume.fsh`, which runs a DDA raymarch and writes `gl_FragDepth`. The
+  shaders are in `assets/cloudedhorizons/shaders`, written in GLSL 330 core.
+- The mod compiles against the LWJGL3 API through lwjgl3ify, so use LWJGL3 method names (`glGetFloatv`,
+  `glUniformMatrix4fv`).
+- `gradle.properties` `mixinsPackage` is relative to `modGroup` (`mixin`, not the full package).
   The mixin config is `src/main/resources/mixins.cloudedhorizons.json`.
 - A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been
   verified in a browser by the agent.

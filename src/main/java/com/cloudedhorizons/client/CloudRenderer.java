@@ -1,158 +1,274 @@
 package com.cloudedhorizons.client;
 
-import java.util.Random;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.Tessellator;
-import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.client.renderer.GLAllocation;
+import net.minecraft.client.renderer.OpenGlHelper;
+import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL32;
+
+import org.apache.commons.io.IOUtils;
 
 /**
- * Smoke-test cloud renderer: draws a static, hand-built voxel cloud field around the world origin. Only exposed faces
- * are emitted. Face brightness stands in for lighting.
+ * Smoke-test GPU cloud renderer. On first use, a fragment shader generates a static voxel volume into a 3D texture,
+ * one layer per draw. Each frame, the volume's bounding box is drawn and a DDA raymarch finds the voxel surface and
+ * writes its depth.
  */
 public final class CloudRenderer {
 
     private static final int VOXEL_SIZE = 8;
-    private static final int SIZE_X = 96;
-    private static final int SIZE_Y = 8;
-    private static final int SIZE_Z = 96;
+    private static final int SIZE_X = 256;
+    private static final int SIZE_Y = 24;
+    private static final int SIZE_Z = 256;
     private static final double BASE_Y = 160.0D;
-    /** World position of the grid's minimum corner, centred on the world origin. */
+    /** World position of the volume's minimum corner, centred on the world origin. */
     private static final double ORIGIN_X = -SIZE_X * VOXEL_SIZE / 2.0D;
     private static final double ORIGIN_Z = -SIZE_Z * VOXEL_SIZE / 2.0D;
+    private static final int SEED = 1;
 
-    private static final boolean[] VOXELS = buildField();
+    private static boolean initialized;
+    private static boolean failed;
+
+    private static int voxelTexture;
+    private static int generateProgram;
+    private static int volumeProgram;
+    private static int emptyVao;
+    private static int cubeVao;
+    private static int cubeVbo;
+
+    private static final FloatBuffer MATRIX = GLAllocation.createDirectFloatBuffer(16);
+    private static final FloatBuffer PROJECTION = GLAllocation.createDirectFloatBuffer(16);
 
     private CloudRenderer() {}
 
-    /** Places flat-based, dome-topped blobs at seeded random positions. */
-    private static boolean[] buildField() {
-        boolean[] voxels = new boolean[SIZE_X * SIZE_Y * SIZE_Z];
-        Random random = new Random(1234L);
-        for (int blob = 0; blob < 40; blob++) {
-            double cx = random.nextDouble() * SIZE_X;
-            double cz = random.nextDouble() * SIZE_Z;
-            double radius = 3.0D + random.nextDouble() * 7.0D;
-            double height = 1.0D + random.nextDouble() * (SIZE_Y - 1);
-            for (int x = 0; x < SIZE_X; x++) {
-                for (int z = 0; z < SIZE_Z; z++) {
-                    double dx = (x + 0.5D - cx) / radius;
-                    double dz = (z + 0.5D - cz) / radius;
-                    double r2 = dx * dx + dz * dz;
-                    if (r2 >= 1.0D) {
-                        continue;
-                    }
-                    int top = (int) Math.ceil(height * Math.sqrt(1.0D - r2));
-                    for (int y = 0; y < Math.min(top, SIZE_Y); y++) {
-                        voxels[index(x, y, z)] = true;
-                    }
-                }
-            }
-        }
-        return voxels;
-    }
-
-    private static int index(int x, int y, int z) {
-        return (y * SIZE_Z + z) * SIZE_X + x;
-    }
-
-    private static boolean solid(int x, int y, int z) {
-        if (x < 0 || y < 0 || z < 0 || x >= SIZE_X || y >= SIZE_Y || z >= SIZE_Z) {
-            return false;
-        }
-        return VOXELS[index(x, y, z)];
-    }
-
     public static void render(Minecraft mc, World world, float partialTicks) {
-        EntityLivingBase view = mc.renderViewEntity;
-        if (view == null) {
+        if (failed) {
             return;
         }
-        double camX = view.lastTickPosX + (view.posX - view.lastTickPosX) * partialTicks;
-        double camY = view.lastTickPosY + (view.posY - view.lastTickPosY) * partialTicks;
-        double camZ = view.lastTickPosZ + (view.posZ - view.lastTickPosZ) * partialTicks;
-
-        Vec3 cloudColour = world.getCloudColour(partialTicks);
-        float r = (float) cloudColour.xCoord;
-        float g = (float) cloudColour.yCoord;
-        float b = (float) cloudColour.zCoord;
-
-        GL11.glDisable(GL11.GL_TEXTURE_2D);
-        GL11.glDisable(GL11.GL_BLEND);
-        GL11.glEnable(GL11.GL_CULL_FACE);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthMask(true);
-
-        Tessellator tessellator = Tessellator.instance;
-        tessellator.startDrawingQuads();
-        // Relative to the camera so float precision stays good far from the origin.
-        tessellator.setTranslation(ORIGIN_X - camX, BASE_Y - camY, ORIGIN_Z - camZ);
-        for (int y = 0; y < SIZE_Y; y++) {
-            for (int z = 0; z < SIZE_Z; z++) {
-                for (int x = 0; x < SIZE_X; x++) {
-                    if (solid(x, y, z)) {
-                        emitVoxel(tessellator, x, y, z, r, g, b);
-                    }
-                }
+        if (!initialized) {
+            try {
+                initialize(mc);
+            } catch (RuntimeException e) {
+                failed = true;
+                System.err.println("[Clouded Horizons] GPU cloud initialisation failed, clouds disabled: " + e);
+                e.printStackTrace();
+                return;
             }
         }
-        tessellator.draw();
-        tessellator.setTranslation(0.0D, 0.0D, 0.0D);
 
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        GL11.glGetFloatv(GL11.GL_MODELVIEW_MATRIX, MATRIX);
+        GL11.glGetFloatv(GL11.GL_PROJECTION_MATRIX, PROJECTION);
+
+        Vec3 colour = world.getCloudColour(partialTicks);
+        double sunAngle = world.getCelestialAngle(partialTicks) * Math.PI * 2.0D;
+
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(true);
+        GL11.glDisable(GL11.GL_BLEND);
+        // Draw back faces so the box still rasterises when the camera is inside it.
+        GL11.glEnable(GL11.GL_CULL_FACE);
+        GL11.glCullFace(GL11.GL_FRONT);
+        // The box can extend past the far plane; clamp instead of clipping it away.
+        GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+
+        GL20.glUseProgram(volumeProgram);
+        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(volumeProgram, "uProj"), false, PROJECTION);
+        GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(volumeProgram, "uView"), false, MATRIX);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(volumeProgram, "uBoxMin"),
+                (float) (ORIGIN_X - RenderManager.renderPosX),
+                (float) (BASE_Y - RenderManager.renderPosY),
+                (float) (ORIGIN_Z - RenderManager.renderPosZ));
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(volumeProgram, "uBoxSize"),
+                SIZE_X * VOXEL_SIZE,
+                SIZE_Y * VOXEL_SIZE,
+                SIZE_Z * VOXEL_SIZE);
+        GL20.glUniform3f(GL20.glGetUniformLocation(volumeProgram, "uDims"), SIZE_X, SIZE_Y, SIZE_Z);
+        GL20.glUniform1f(GL20.glGetUniformLocation(volumeProgram, "uVS"), VOXEL_SIZE);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(volumeProgram, "uColour"),
+                (float) colour.xCoord,
+                (float) colour.yCoord,
+                (float) colour.zCoord);
+        GL20.glUniform3f(
+                GL20.glGetUniformLocation(volumeProgram, "uSunDir"),
+                (float) -Math.sin(sunAngle),
+                (float) Math.cos(sunAngle),
+                0.0F);
+        GL20.glUniform1i(GL20.glGetUniformLocation(volumeProgram, "uVoxels"), 0);
+
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
+        GL30.glBindVertexArray(cubeVao);
+        GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 36);
+        GL30.glBindVertexArray(0);
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
+        GL20.glUseProgram(0);
+
+        GL11.glDisable(GL32.GL_DEPTH_CLAMP);
+        GL11.glCullFace(GL11.GL_BACK);
         GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
-    /** Emits the exposed faces of one voxel with counter-clockwise front faces. */
-    private static void emitVoxel(Tessellator t, int x, int y, int z, float r, float g, float b) {
-        double x0 = x * VOXEL_SIZE, y0 = y * VOXEL_SIZE, z0 = z * VOXEL_SIZE;
-        double x1 = x0 + VOXEL_SIZE, y1 = y0 + VOXEL_SIZE, z1 = z0 + VOXEL_SIZE;
+    private static void initialize(Minecraft mc) {
+        initialized = true;
+        generateProgram = createProgram("fullscreen.vsh", "generate.fsh");
+        volumeProgram = createProgram("volume.vsh", "volume.fsh");
+        emptyVao = GL30.glGenVertexArrays();
+        createCube();
+        createVoxelTexture();
+        generate(mc);
+    }
 
-        if (!solid(x, y + 1, z)) {
-            t.setColorOpaque_F(r, g, b);
-            t.addVertex(x0, y1, z0);
-            t.addVertex(x0, y1, z1);
-            t.addVertex(x1, y1, z1);
-            t.addVertex(x1, y1, z0);
+    private static void createVoxelTexture() {
+        voxelTexture = GL11.glGenTextures();
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, voxelTexture);
+        GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+        // Layout (x, z, y): each generation draw fills one horizontal layer.
+        GL12.glTexImage3D(
+                GL12.GL_TEXTURE_3D,
+                0,
+                GL30.GL_R8,
+                SIZE_X,
+                SIZE_Z,
+                SIZE_Y,
+                0,
+                GL11.GL_RED,
+                GL11.GL_UNSIGNED_BYTE,
+                (ByteBuffer) null);
+        GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
+    }
+
+    /** Runs the generation shader once per voxel layer into the 3D texture, then restores Minecraft's framebuffer. */
+    private static void generate(Minecraft mc) {
+        int fbo = GL30.glGenFramebuffers();
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
+        GL11.glViewport(0, 0, SIZE_X, SIZE_Z);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glDisable(GL11.GL_BLEND);
+        GL11.glDisable(GL11.GL_CULL_FACE);
+
+        GL20.glUseProgram(generateProgram);
+        GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uHeight"), SIZE_Y);
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uVS"), VOXEL_SIZE);
+        GL20.glUniform2f(
+                GL20.glGetUniformLocation(generateProgram, "uOriginXZ"),
+                (float) ORIGIN_X,
+                (float) ORIGIN_Z);
+        GL30.glUniform1ui(GL20.glGetUniformLocation(generateProgram, "uSeed"), SEED);
+        int layerLocation = GL20.glGetUniformLocation(generateProgram, "uLayer");
+
+        GL30.glBindVertexArray(emptyVao);
+        for (int layer = 0; layer < SIZE_Y; layer++) {
+            GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, voxelTexture, 0, layer);
+            if (layer == 0) {
+                int status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);
+                if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
+                    throw new IllegalStateException("Voxel framebuffer incomplete: 0x" + Integer.toHexString(status));
+                }
+            }
+            GL20.glUniform1i(layerLocation, layer);
+            GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
         }
-        if (!solid(x, y - 1, z)) {
-            t.setColorOpaque_F(r * 0.7F, g * 0.7F, b * 0.7F);
-            t.addVertex(x0, y0, z0);
-            t.addVertex(x1, y0, z0);
-            t.addVertex(x1, y0, z1);
-            t.addVertex(x0, y0, z1);
+        GL30.glBindVertexArray(0);
+        GL20.glUseProgram(0);
+
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+        GL30.glDeleteFramebuffers(fbo);
+        if (OpenGlHelper.isFramebufferEnabled()) {
+            mc.getFramebuffer().bindFramebuffer(true);
+        } else {
+            GL11.glViewport(0, 0, mc.displayWidth, mc.displayHeight);
         }
-        if (!solid(x + 1, y, z)) {
-            t.setColorOpaque_F(r * 0.9F, g * 0.9F, b * 0.9F);
-            t.addVertex(x1, y0, z0);
-            t.addVertex(x1, y1, z0);
-            t.addVertex(x1, y1, z1);
-            t.addVertex(x1, y0, z1);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glEnable(GL11.GL_CULL_FACE);
+    }
+
+    /** Unit cube as 12 triangles, counter-clockwise when seen from outside. */
+    private static void createCube() {
+        float[][] quads = {
+                { 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0 }, // +Y
+                { 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1 }, // -Y
+                { 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1 }, // +X
+                { 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0 }, // -X
+                { 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1 }, // +Z
+                { 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0 }, // -Z
+        };
+        FloatBuffer data = GLAllocation.createDirectFloatBuffer(36 * 3);
+        for (float[] q : quads) {
+            for (int corner : new int[] { 0, 1, 2, 0, 2, 3 }) {
+                data.put(q, corner * 3, 3);
+            }
         }
-        if (!solid(x - 1, y, z)) {
-            t.setColorOpaque_F(r * 0.9F, g * 0.9F, b * 0.9F);
-            t.addVertex(x0, y0, z0);
-            t.addVertex(x0, y0, z1);
-            t.addVertex(x0, y1, z1);
-            t.addVertex(x0, y1, z0);
+        data.flip();
+
+        cubeVao = GL30.glGenVertexArrays();
+        GL30.glBindVertexArray(cubeVao);
+        cubeVbo = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, cubeVbo);
+        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, data, GL15.GL_STATIC_DRAW);
+        GL20.glEnableVertexAttribArray(0);
+        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 12, 0L);
+        GL30.glBindVertexArray(0);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+    }
+
+    private static int createProgram(String vertexName, String fragmentName) {
+        int vertex = compileShader(GL20.GL_VERTEX_SHADER, vertexName);
+        int fragment = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentName);
+        int program = GL20.glCreateProgram();
+        GL20.glAttachShader(program, vertex);
+        GL20.glAttachShader(program, fragment);
+        GL20.glLinkProgram(program);
+        GL20.glDeleteShader(vertex);
+        GL20.glDeleteShader(fragment);
+        if (GL20.glGetProgrami(program, GL20.GL_LINK_STATUS) == GL11.GL_FALSE) {
+            throw new IllegalStateException(
+                    "Link failed (" + vertexName + ", " + fragmentName + "): "
+                            + GL20.glGetProgramInfoLog(program, 8192));
         }
-        if (!solid(x, y, z + 1)) {
-            t.setColorOpaque_F(r * 0.8F, g * 0.8F, b * 0.8F);
-            t.addVertex(x0, y0, z1);
-            t.addVertex(x1, y0, z1);
-            t.addVertex(x1, y1, z1);
-            t.addVertex(x0, y1, z1);
+        return program;
+    }
+
+    private static int compileShader(int type, String name) {
+        int shader = GL20.glCreateShader(type);
+        GL20.glShaderSource(shader, readShader(name));
+        GL20.glCompileShader(shader);
+        if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == GL11.GL_FALSE) {
+            throw new IllegalStateException("Compile failed (" + name + "): " + GL20.glGetShaderInfoLog(shader, 8192));
         }
-        if (!solid(x, y, z - 1)) {
-            t.setColorOpaque_F(r * 0.8F, g * 0.8F, b * 0.8F);
-            t.addVertex(x0, y0, z0);
-            t.addVertex(x0, y1, z0);
-            t.addVertex(x1, y1, z0);
-            t.addVertex(x1, y0, z0);
+        return shader;
+    }
+
+    private static String readShader(String name) {
+        String path = "/assets/cloudedhorizons/shaders/" + name;
+        try (InputStream in = CloudRenderer.class.getResourceAsStream(path)) {
+            if (in == null) {
+                throw new IllegalStateException("Missing shader " + path);
+            }
+            return IOUtils.toString(in, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not read shader " + path, e);
         }
     }
 }

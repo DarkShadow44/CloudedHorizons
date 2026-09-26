@@ -52,3 +52,9 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **Local repository — 2026-09-26:** The hook point `RenderGlobal.renderClouds(float)` and its caller
   `EntityRenderer.renderCloudsCheck` were taken from the decompiled sources in `build/rfg/minecraft-src`.
 - **Agent proposal — 2026-09-26:** A HEAD-cancel mixin, and a static blob field drawn with the Tessellator.
+- **User requirement — 2026-09-26:** Next step: the GPU generates the voxels and the mod just renders them.
+- **Agent proposal — 2026-09-26:** Generate a 3D texture with a fragment shader per layer, and render it by
+  raymarching inside a bounding-box proxy mesh that writes fragment depth. Both come from the agent's general graphics
+  knowledge.
+- **Experiment — 2026-09-26:** The GTNH convention plugin resolves `mixinsPackage` relative to `modGroup`; this was
+  learned from the user's build error.
