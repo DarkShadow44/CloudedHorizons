@@ -42,6 +42,9 @@ Rendering code and mixins must be compatible with that environment.
   The client command `/clouds morph [speed]` gets or sets the speed, and `/clouds height [y]` gets or sets the
   volume's base Y (default 160; placement only, no regeneration). The command is registered in
   `ClientProxy.init`.
+- `/clouds flyspeed [speed]` gets or sets the local player's creative fly speed (vanilla default 0.05). In
+  singleplayer it also sets the integrated server's player, so it is saved to the player's abilities in level.dat.
+  On a remote server it is client-side only.
 - Dev hack `MixinEntityPlayerSP`: scales the creative-flight rise/sink impulse (vanilla 0.15 per tick) by
   flySpeed / 0.05, so fly speed also affects vertical flight.
 - Cloud height and morph speed are saved in the Forge config (category `clouds`, keys `height` and `morphSpeed`).

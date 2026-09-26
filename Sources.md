@@ -81,3 +81,6 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **User requirement — 2026-09-26:** Use the same noise in the mod, and put the noise in a separate shader.
 - **Agent proposal — 2026-09-26:** Link `noise.fsh` into the program as a second fragment shader object instead of
   pasting the source in with an include preprocessor.
+- **User requirement — 2026-09-26:** Add `/clouds flyspeed` to set the player's fly speed.
+- **User requirement — 2026-09-26:** The fly speed should persist through the `flySpeed` in level.dat. The agent
+  proposed setting it on the integrated server's `EntityPlayerMP`, which saves it.
