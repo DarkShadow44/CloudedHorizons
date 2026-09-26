@@ -105,3 +105,13 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **Agent proposal — 2026-09-26:** Port the webdemo's coarse occupancy skipping (8x4x8 cells) to the mod, spread
   regeneration over frames one 4-layer slab at a time, and clamp the size to `GL_MAX_3D_TEXTURE_SIZE`.
 - **User requirement — 2026-09-26:** Make the noise cutoff configurable.
+- **User requirement — 2026-09-26:** A setting to smooth the top and bottom of the cloud field.
+- **Agent proposal — 2026-09-26:** One edge-fade distance in voxels, implemented as a smoothstep bias subtracted
+  from the noise near both boundaries.
+- **Experiment — 2026-09-26:** The user saw the smoothstep bias edge fade as still flat and rounding very slowly. It
+  was replaced with a linear threshold ramp from the cutoff to 1.0 (agent proposal).
+- **User observation — 2026-09-26:** The staged linear ramp to 1.0 still barely improved the top and bottom edges.
+- **Experiment — 2026-09-26:** A local Python port of the shader's 4D simplex function sampled 20,000 points with
+  seed 1; its maximum was about 0.55 and none exceeded 0.6. The 1.0 endpoint was far outside the observed range,
+  so most of the requested fade width was empty. The replacement ramps to at least 0.6, measures from outer voxel
+  centers, forces the outermost layers empty, and limits the fade to half the field height (agent proposal).

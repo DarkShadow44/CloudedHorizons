@@ -21,6 +21,8 @@ public final class Config {
     public static double noiseScaleZ = 32.0D;
     /** Noise threshold: a voxel is solid where the noise (roughly -1..1) is above it. */
     public static double cutoff = 0.3D;
+    /** Distance in voxels from the field's top and bottom over which clouds thin out; 0 = hard cut. */
+    public static double edgeFade = 0.0D;
     /** Noise time-axis units per second of game time. */
     public static double morphSpeed = 0.02D;
 
@@ -41,6 +43,7 @@ public final class Config {
             morphSpeed = morphSpeedProperty().getDouble();
             fieldHeight = fieldHeightProperty().getInt();
             cutoff = cutoffProperty().getDouble();
+            edgeFade = edgeFadeProperty().getDouble();
             noiseScaleX = noiseScaleProperty("X").getDouble();
             noiseScaleY = noiseScaleProperty("Y").getDouble();
             noiseScaleZ = noiseScaleProperty("Z").getDouble();
@@ -60,6 +63,7 @@ public final class Config {
         morphSpeedProperty().set(morphSpeed);
         fieldHeightProperty().set(fieldHeight);
         cutoffProperty().set(cutoff);
+        edgeFadeProperty().set(edgeFade);
         noiseScaleProperty("X").set(noiseScaleX);
         noiseScaleProperty("Y").set(noiseScaleY);
         noiseScaleProperty("Z").set(noiseScaleZ);
@@ -84,6 +88,15 @@ public final class Config {
                 "cutoff",
                 0.3D,
                 "Noise threshold (noise is roughly -1..1). Voxels above it are cloud; higher values mean fewer clouds.");
+    }
+
+    private static Property edgeFadeProperty() {
+        return configuration.get(
+                CATEGORY_CLOUDS,
+                "edgeFade",
+                0.0D,
+                "Distance in voxels from the top and bottom of the cloud field over which clouds thin out and round off. "
+                        + "0 cuts them off flat.");
     }
 
     private static Property noiseScaleProperty(String axis) {

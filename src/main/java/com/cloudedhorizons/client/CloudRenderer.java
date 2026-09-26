@@ -131,6 +131,15 @@ public final class CloudRenderer {
         fieldChanged();
     }
 
+    public static double getEdgeFade() {
+        return Config.edgeFade;
+    }
+
+    public static void setEdgeFade(double voxels) {
+        Config.edgeFade = voxels;
+        fieldChanged();
+    }
+
     public static double getNoiseScaleX() {
         return Config.noiseScaleX;
     }
@@ -424,6 +433,8 @@ public final class CloudRenderer {
                 (float) Config.noiseScaleY,
                 (float) Config.noiseScaleZ);
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uCutoff"), (float) Config.cutoff);
+        GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEdgeFade"), (float) Config.edgeFade);
+        GL20.glUniform1i(GL20.glGetUniformLocation(generateProgram, "uLayers"), allocatedLayers);
         // Wrapped so float precision in the shader stays good over long sessions; the jump is rare and slow.
         GL20.glUniform1f(GL20.glGetUniformLocation(generateProgram, "uEvolve"), (float) (morphPhase % 1000.0D));
         int layerLocation = GL20.glGetUniformLocation(generateProgram, "uLayer");
