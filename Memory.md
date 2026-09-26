@@ -28,8 +28,10 @@ Rendering code and mixins must be compatible with that environment.
 - The current configuration contains a general `enabled` option.
 - Mixin support is enabled in `gradle.properties`.
 - The configured mixin package is `com.cloudedhorizons.mixin`.
-- The mixin package currently contains only `package-info.java`; no functional mixins have been added.
-- No cloud generation or rendering implementation exists yet.
+- Smoke-test cloud replacement (not yet built or run): `MixinRenderGlobal` cancels `RenderGlobal.renderClouds` at the
+  HEAD in surface worlds when `Config.enabled` is on, and calls `client.CloudRenderer`. That renderer draws a static
+  96x8x96 grid of 8-block voxels centred on world X/Z 0 at Y 160, using the Tessellator with exposed faces only.
+  The mixin config is `src/main/resources/mixins.cloudedhorizons.json`.
 - A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been
   verified in a browser by the agent.
 

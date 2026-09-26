@@ -44,3 +44,11 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   h = 0, and time evolution through wind translation plus a noise time axis. Also a coarse occupancy grid for
   DDA empty-space skipping, and PCG-style integer hashing for gradient noise. All of these come from the agent's
   general graphics knowledge; no web sources were used.
+
+### Minecraft cloud smoke test
+
+- **User requirement — 2026-09-26:** Add a simple static cloud render in Minecraft as a smoke test for custom clouds,
+  and disable vanilla clouds.
+- **Local repository — 2026-09-26:** The hook point `RenderGlobal.renderClouds(float)` and its caller
+  `EntityRenderer.renderCloudsCheck` were taken from the decompiled sources in `build/rfg/minecraft-src`.
+- **Agent proposal — 2026-09-26:** A HEAD-cancel mixin, and a static blob field drawn with the Tessellator.
