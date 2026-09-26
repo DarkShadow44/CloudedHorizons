@@ -68,3 +68,4 @@ new external fact, user requirement, algorithm, visual reference, or substantial
 - **Experiment — 2026-09-26:** The user saw the clouds drifting in one direction. The cause was that the detail noise's
   time offset was added to its world-Z axis, which translated it. The fix uses 4D gradient noise with time as the
   fourth axis (agent proposal), in both the webdemo and `generate.fsh`.
+- **User requirement — 2026-09-26:** Make the cloud settings persistent: mainly height, but also morph speed.

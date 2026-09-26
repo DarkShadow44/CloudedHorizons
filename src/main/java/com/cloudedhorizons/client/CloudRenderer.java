@@ -23,6 +23,8 @@ import org.lwjgl.opengl.GL32;
 
 import org.apache.commons.io.IOUtils;
 
+import com.cloudedhorizons.Config;
+
 /**
  * Smoke-test GPU cloud renderer. A fragment shader generates the voxel volume into a 3D texture, one layer per draw.
  * The field's time axis advances at {@link #getMorphSpeed()}, and the volume is regenerated every
@@ -35,19 +37,13 @@ public final class CloudRenderer {
     private static final int SIZE_X = 256;
     private static final int SIZE_Y = 24;
     private static final int SIZE_Z = 256;
-    private static final double DEFAULT_BASE_Y = 160.0D;
     /** World position of the volume's minimum corner, centred on the world origin. */
     private static final double ORIGIN_X = -SIZE_X * VOXEL_SIZE / 2.0D;
     private static final double ORIGIN_Z = -SIZE_Z * VOXEL_SIZE / 2.0D;
     private static final int SEED = 1;
     /** Regenerate the volume at most this often, in world ticks. */
     private static final double REGEN_INTERVAL_TICKS = 2.0D;
-    private static final float DEFAULT_MORPH_SPEED = 0.02F;
 
-    /** Noise time-axis units per second of game time. */
-    private static float morphSpeed = DEFAULT_MORPH_SPEED;
-    /** World Y of the volume's bottom face. Only affects placement, so changing it needs no regeneration. */
-    private static double baseY = DEFAULT_BASE_Y;
     private static double morphPhase;
     private static double lastWorldTime = Double.NaN;
     private static double lastRegenTime = Double.NEGATIVE_INFINITY;
@@ -68,20 +64,23 @@ public final class CloudRenderer {
 
     private CloudRenderer() {}
 
-    public static float getMorphSpeed() {
-        return morphSpeed;
+    public static double getMorphSpeed() {
+        return Config.morphSpeed;
     }
 
-    public static void setMorphSpeed(float speed) {
-        morphSpeed = speed;
+    public static void setMorphSpeed(double speed) {
+        Config.morphSpeed = speed;
+        Config.saveClouds();
     }
 
     public static double getBaseY() {
-        return baseY;
+        return Config.cloudHeight;
     }
 
     public static void setBaseY(double y) {
-        baseY = y;
+        // Only affects placement, so changing it needs no regeneration.
+        Config.cloudHeight = y;
+        Config.saveClouds();
     }
 
     public static void render(Minecraft mc, World world, float partialTicks) {
@@ -121,7 +120,7 @@ public final class CloudRenderer {
         GL20.glUniform3f(
                 GL20.glGetUniformLocation(volumeProgram, "uBoxMin"),
                 (float) (ORIGIN_X - RenderManager.renderPosX),
-                (float) (baseY - RenderManager.renderPosY),
+                (float) (Config.cloudHeight - RenderManager.renderPosY),
                 (float) (ORIGIN_Z - RenderManager.renderPosZ));
         GL20.glUniform3f(
                 GL20.glGetUniformLocation(volumeProgram, "uBoxSize"),
@@ -177,9 +176,9 @@ public final class CloudRenderer {
             lastWorldTime = now;
             return;
         }
-        morphPhase += (now - lastWorldTime) / 20.0D * morphSpeed;
+        morphPhase += (now - lastWorldTime) / 20.0D * Config.morphSpeed;
         lastWorldTime = now;
-        if (morphSpeed != 0.0F && now - lastRegenTime >= REGEN_INTERVAL_TICKS) {
+        if (Config.morphSpeed != 0.0D && now - lastRegenTime >= REGEN_INTERVAL_TICKS) {
             lastRegenTime = now;
             generate(mc);
         }

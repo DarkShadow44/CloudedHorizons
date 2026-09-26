@@ -40,7 +40,7 @@ public final class CloudsCommand extends CommandBase {
         // parseDouble throws a NumberInvalidException, which Minecraft reports in chat.
         if ("morph".equalsIgnoreCase(args[0])) {
             if (args.length == 2) {
-                CloudRenderer.setMorphSpeed((float) parseDouble(sender, args[1]));
+                CloudRenderer.setMorphSpeed(parseDouble(sender, args[1]));
                 reply(sender, "Cloud morph speed set to " + CloudRenderer.getMorphSpeed());
             } else {
                 reply(sender, "Cloud morph speed: " + CloudRenderer.getMorphSpeed());

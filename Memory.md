@@ -44,6 +44,8 @@ Rendering code and mixins must be compatible with that environment.
   `ClientProxy.init`.
 - Dev hack `MixinEntityPlayerSP`: scales the creative-flight rise/sink impulse (vanilla 0.15 per tick) by
   flySpeed / 0.05, so fly speed also affects vertical flight.
+- Cloud height and morph speed are saved in the Forge config (category `clouds`, keys `height` and `morphSpeed`).
+  `Config.saveClouds()` writes them whenever a `/clouds` command sets a value.
 - `gradle.properties` `mixinsPackage` is relative to `modGroup` (`mixin`, not the full package).
   The mixin config is `src/main/resources/mixins.cloudedhorizons.json`.
 - A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been
