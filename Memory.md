@@ -30,13 +30,16 @@ Rendering code and mixins must be compatible with that environment.
 - The current configuration contains a general `enabled` option.
 - Mixin support is enabled in `gradle.properties`.
 - The configured mixin package is `com.cloudedhorizons.mixin`.
-- Smoke-test cloud replacement (built and running with static CPU voxels; the GPU version is not yet built):
+- Cloud replacement (GPU; the large-field version has not been built yet):
   `MixinRenderGlobal` cancels `RenderGlobal.renderClouds` at the HEAD in surface worlds when `Config.enabled` is on,
-  and calls `client.CloudRenderer`. That renderer generates a 256 x fieldHeight x 256 volume of 8-block voxels (centred on
-  X/Z 0, base Y 160) once, on the GPU: `generate.fsh` writes one layer per draw into an R8 3D texture laid out
-  x,z,y, using the webdemo field with the "Fair cumulus" constants and time frozen. It then draws the volume's
-  bounding box (back faces, depth clamp) with `volume.fsh`, which runs a DDA raymarch and writes `gl_FragDepth`. The
-  shaders are in `assets/cloudedhorizons/shaders`, written in GLSL 330 core.
+  and calls `client.CloudRenderer`. The field is `FIELD_SIZE` 2560 x fieldHeight x 2560 voxels of 8 blocks, centred
+  on X/Z 0 and limited by `GL_MAX_3D_TEXTURE_SIZE` (a warning is logged). `generate.fsh` + `noise.fsh` write one layer
+  per draw into an R8 3D texture laid out x,z,y. `coarse.fsh` builds a coarse occupancy texture (one texel per 8x4x8
+  voxels: 1 if any voxel is solid), which `volume.fsh` uses to skip empty cells during its DDA (max 2048 steps).
+  Regeneration is spread over frames: one slab (4 layers plus its coarse layer) per frame, with a new pass at most
+  every 2 ticks while morphing. Field changes queue a pass, and a height change reallocates and regenerates
+  everything at once. The volume's bounding box is drawn with back faces and depth clamp; `volume.fsh` writes
+  `gl_FragDepth`. The shaders are in `assets/cloudedhorizons/shaders`, written in GLSL 330 core.
 - The mod compiles against the LWJGL3 API through lwjgl3ify, so use LWJGL3 method names (`glGetFloatv`,
   `glUniformMatrix4fv`).
 - The clouds morph in place: `CloudRenderer` advances a noise time phase by game time multiplied by `morphSpeed`

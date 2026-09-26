@@ -101,3 +101,6 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   quick testing).
 - **Agent proposal — 2026-09-26:** Throttle config saves to once per second so dragging a slider does not rewrite the
   file every frame.
+- **User requirement — 2026-09-26:** Make the in-game cloud field 10 times the radius (256 -> 2560 voxels).
+- **Agent proposal — 2026-09-26:** Port the webdemo's coarse occupancy skipping (8x4x8 cells) to the mod, spread
+  regeneration over frames one 4-layer slab at a time, and clamp the size to `GL_MAX_3D_TEXTURE_SIZE`.

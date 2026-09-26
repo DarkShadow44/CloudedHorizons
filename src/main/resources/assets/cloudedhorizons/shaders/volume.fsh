@@ -1,7 +1,9 @@
 #version 330 core
 // Voxel DDA through the generated volume. Writes real depth so terrain and clouds occlude each other correctly.
+// Empty coarse cells (see coarse.fsh) are skipped in one step.
 
 uniform sampler3D uVoxels; // layout (x, z, y)
+uniform sampler3D uCoarse; // layout (x, z, y), one texel per COARSE block of voxels
 uniform mat4 uProj;
 uniform mat4 uView;
 uniform vec3 uBoxMin;
@@ -14,10 +16,9 @@ in vec3 vPos;
 flat in vec3 vEye;
 out vec4 outColor;
 
-bool solid(ivec3 c) {
-    if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(uDims)))) return false;
-    return texelFetch(uVoxels, c.xzy, 0).r > 0.5;
-}
+const vec3 COARSE = vec3(8.0, 4.0, 8.0); // must match coarse.fsh and CloudRenderer
+const int MAX_STEPS = 2048;
+
 
 void main() {
     vec3 rd = normalize(vPos - vEye);
@@ -36,11 +37,22 @@ void main() {
     float t = max(tn, 0.0) + 1e-3;
     vec3 sg = step(0.0, rd);
     bool hit = false;
-    for (int i = 0; i < 1024; i++) {
+    ivec3 hiCell = ivec3(uDims) - 1;
+    for (int i = 0; i < MAX_STEPS; i++) {
         if (t > tf) break;
-        ivec3 c = ivec3(floor(ro + rd * t));
-        if (solid(c)) { hit = true; break; }
-        vec3 tb = (mix(vec3(c), vec3(c) + 1.0, sg) - ro) * inv;
+        ivec3 c = clamp(ivec3(floor(ro + rd * t)), ivec3(0), hiCell);
+        ivec3 cc = ivec3(vec3(c) / COARSE);
+        vec3 lo, hi;
+        if (texelFetch(uCoarse, cc.xzy, 0).r < 0.5) {
+            // Empty coarse cell: jump to its far side.
+            lo = vec3(cc) * COARSE;
+            hi = lo + COARSE;
+        } else {
+            if (texelFetch(uVoxels, c.xzy, 0).r > 0.5) { hit = true; break; }
+            lo = vec3(c);
+            hi = lo + 1.0;
+        }
+        vec3 tb = (mix(lo, hi, sg) - ro) * inv;
         float te = min(min(tb.x, tb.y), tb.z);
         nrm = te == tb.x ? vec3(-sign(rd.x), 0, 0) : te == tb.y ? vec3(0, -sign(rd.y), 0) : vec3(0, 0, -sign(rd.z));
         t = te + 1e-3;
