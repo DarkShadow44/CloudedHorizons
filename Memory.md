@@ -39,7 +39,9 @@ Rendering code and mixins must be compatible with that environment.
   `glUniformMatrix4fv`).
 - The clouds morph in place: `CloudRenderer` advances a noise time phase by game time multiplied by `morphSpeed`
   (default 0.02 per second) and regenerates the volume every 2 ticks. There is no wind or translation, per the user.
-  The client command `/clouds morph [speed]` gets or sets the speed; it is registered in `ClientProxy.init`.
+  The client command `/clouds morph [speed]` gets or sets the speed, and `/clouds height [y]` gets or sets the
+  volume's base Y (default 160; placement only, no regeneration). The command is registered in
+  `ClientProxy.init`.
 - `gradle.properties` `mixinsPackage` is relative to `modGroup` (`mixin`, not the full package).
   The mixin config is `src/main/resources/mixins.cloudedhorizons.json`.
 - A first web demo exists at `webdemo/index.html` (single file, WebGL2, no dependencies). It has not yet been

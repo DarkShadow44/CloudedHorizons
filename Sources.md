@@ -62,3 +62,4 @@ new external fact, user requirement, algorithm, visual reference, or substantial
   `/clouds morph` reports the morph speed, and `/clouds morph <float>` sets it.
 - **Agent proposal — 2026-09-26:** Advance the morph phase from game-time deltas so it pauses with the game and speed
   changes don't make it jump, and throttle regeneration to every 2 ticks.
+- **User requirement — 2026-09-26:** Add `/clouds height [y]`, which works the same way as `/clouds morph` but for the cloud height.

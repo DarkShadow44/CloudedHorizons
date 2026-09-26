@@ -10,7 +10,7 @@ import net.minecraft.util.ChatComponentText;
 /** Client-side {@code /clouds} command for tweaking the cloud renderer at runtime. */
 public final class CloudsCommand extends CommandBase {
 
-    private static final String USAGE = "/clouds morph [speed]";
+    private static final String USAGE = "/clouds <morph [speed] | height [y]>";
 
     @Override
     public String getCommandName() {
@@ -34,20 +34,35 @@ public final class CloudsCommand extends CommandBase {
 
     @Override
     public void processCommand(ICommandSender sender, String[] args) {
-        if (args.length == 0 || !"morph".equalsIgnoreCase(args[0]) || args.length > 2) {
+        if (args.length == 0 || args.length > 2) {
             throw new WrongUsageException(USAGE);
         }
-        if (args.length == 2) {
-            // parseDouble throws a NumberInvalidException, which Minecraft reports in chat.
-            CloudRenderer.setMorphSpeed((float) parseDouble(sender, args[1]));
-            sender.addChatMessage(new ChatComponentText("Cloud morph speed set to " + CloudRenderer.getMorphSpeed()));
+        // parseDouble throws a NumberInvalidException, which Minecraft reports in chat.
+        if ("morph".equalsIgnoreCase(args[0])) {
+            if (args.length == 2) {
+                CloudRenderer.setMorphSpeed((float) parseDouble(sender, args[1]));
+                reply(sender, "Cloud morph speed set to " + CloudRenderer.getMorphSpeed());
+            } else {
+                reply(sender, "Cloud morph speed: " + CloudRenderer.getMorphSpeed());
+            }
+        } else if ("height".equalsIgnoreCase(args[0])) {
+            if (args.length == 2) {
+                CloudRenderer.setBaseY(parseDouble(sender, args[1]));
+                reply(sender, "Cloud height set to " + CloudRenderer.getBaseY());
+            } else {
+                reply(sender, "Cloud height: " + CloudRenderer.getBaseY());
+            }
         } else {
-            sender.addChatMessage(new ChatComponentText("Cloud morph speed: " + CloudRenderer.getMorphSpeed()));
+            throw new WrongUsageException(USAGE);
         }
+    }
+
+    private static void reply(ICommandSender sender, String message) {
+        sender.addChatMessage(new ChatComponentText(message));
     }
 
     @Override
     public List<String> addTabCompletionOptions(ICommandSender sender, String[] args) {
-        return args.length == 1 ? getListOfStringsMatchingLastWord(args, "morph") : null;
+        return args.length == 1 ? getListOfStringsMatchingLastWord(args, "morph", "height") : null;
     }
 }
